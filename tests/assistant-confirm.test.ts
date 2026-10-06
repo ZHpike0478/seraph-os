@@ -162,7 +162,7 @@ async function scriptEndpoint(script: { deltas: Array<{ text?: string, toolCalls
 
 function openSpaceAssistant(endpointUrl: string, tools: AssistantTool[], memory: import("@server/core/assistant/memory").default) {
 
-    return Assistant.open({ baseUrl: endpointUrl, apiKey: "test-key", model: "test-model" }, memory, tools)!
+    return Assistant.open({ baseUrl: endpointUrl, apiKey: "test-key", embedModel: "test-embed", model: "test-model" }, memory, tools)!
 }
 
 /** Mounts the scripted assistant as the space's own, so its streaming route drives it. */

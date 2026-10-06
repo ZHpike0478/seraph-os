@@ -12,8 +12,11 @@ import System from "./system"
 import createServerRuntime from "./server-runtime/factory"
 import SystemLogs from "./logs"
 import AssistantMemory from "./assistant/memory"
+import RagIndex from "./assistant/rag"
 import Assistant, { assistantConfiguration, type AssistantConfigurationValues } from "./assistant/assistant"
 import assistantTools from "./assistant/tools"
+import ragTools from "./assistant/rag-tools"
+import Embedder from "./assistant/embeddings"
 
 export default class Application {
 
@@ -72,6 +75,9 @@ export default class Application {
     /** One space's assistant memory, open even before a model is configured. */
     public readonly assistantMemory: AssistantMemory
 
+    /** One space's retrieval index over its own files. */
+    public readonly ragIndex: RagIndex
+
     private assistantInstance: Assistant | null
 
     private constructor(payload: ApplicationPayload) {
@@ -92,11 +98,21 @@ export default class Application {
 
         this.assistantMemory = payload.assistantMemory
 
+        this.ragIndex = payload.ragIndex
+
         // A model endpoint configured at boot brings the assistant with it;
         // the tools see the finished application that carries them.
         this.assistantInstance = payload.assistantConfiguration
 
-            ? Assistant.open(payload.assistantConfiguration, payload.assistantMemory, assistantTools(this as unknown as Application))
+            ? Assistant.open(payload.assistantConfiguration, payload.assistantMemory, [
+
+                ...assistantTools(this as unknown as Application),
+
+                // The retrieval tools ride the same endpoint: an embeddings
+                // model configured alongside the model unlocks them.
+                ...ragTools(this as unknown as Application, Embedder.open(payload.assistantConfiguration)!)
+
+            ])
 
             : null
 
@@ -111,6 +127,9 @@ export default class Application {
 
     /** Closes the space's own databases; tests use this before removing homes. */
     public close() {
+
+        try { this.ragIndex.close() }
+        catch { }
 
         try { this.assistantMemory.close() }
         catch { }
@@ -135,7 +154,9 @@ export default class Application {
 
         const assistantMemory = AssistantMemory.open(join(homePath, "assistant.sqlite"))
 
-        const application = new Application({ icons, storage, home, store, authentication, appearanceManager, uploads, assistantMemory, assistantConfiguration: assistantConfiguration(process.env) })
+        const ragIndex = RagIndex.open(join(homePath, "assistant-rag.sqlite"))
+
+        const application = new Application({ icons, storage, home, store, authentication, appearanceManager, uploads, assistantMemory, ragIndex, assistantConfiguration: assistantConfiguration(process.env) })
 
         await application.linkManager.authManager.programManager.initialize()
 
@@ -163,6 +184,8 @@ interface ApplicationPayload {
     uploads: UploadManager
 
     assistantMemory: AssistantMemory
+
+    ragIndex: RagIndex
 
     assistantConfiguration: AssistantConfigurationValues | null
 }

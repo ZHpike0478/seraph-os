@@ -39,6 +39,7 @@ sudo loginctl enable-linger $USER
 | `SERAPH_LLM_BASE_URL` | OpenAI-compatible endpoint for the assistant | none (assistant off) |
 | `SERAPH_LLM_API_KEY` | Bearer key for that endpoint | none |
 | `SERAPH_LLM_MODEL` | Model name | `llama3.2` |
+| `SERAPH_LLM_EMBED_MODEL` | Embeddings model for the user's file-search RAG tools (same endpoint) | `nomic-embed-text` |
 
 Works with any OpenAI-compatible server: Ollama (`http://localhost:11434/v1`),
 vLLM, NVIDIA NIM (`https://integrate.api.nvidia.com/v1`), OpenRouter.

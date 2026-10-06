@@ -92,7 +92,7 @@ test("the endpoint configuration reads SERAPH_LLM_* variables", () => {
 
     const local = assistantConfiguration({ SERAPH_LLM_BASE_URL: "http://localhost:11434/v1/" })
 
-    assert.deepEqual(local, { baseUrl: "http://localhost:11434/v1", apiKey: "", model: "llama3.2" })
+    assert.deepEqual(local, { baseUrl: "http://localhost:11434/v1", apiKey: "", embedModel: "nomic-embed-text", model: "llama3.2" })
 
     const full = assistantConfiguration({
 
@@ -108,6 +108,8 @@ test("the endpoint configuration reads SERAPH_LLM_* variables", () => {
         baseUrl: "https://integrate.api.nvidia.com/v1",
 
         apiKey: "nvapi-key",
+
+        embedModel: "nomic-embed-text",
 
         model: "meta/llama-3.1-70b-instruct"
     })
@@ -156,7 +158,7 @@ test("one turn streams text and runs tools in order", async () => {
 
     homes.push(directory)
 
-    const assistant = Assistant.open({ baseUrl: endpoint.url, apiKey: "test", model: "test-model" }, AssistantMemory.open(join(directory, "assistant.sqlite")), tools)
+    const assistant = Assistant.open({ baseUrl: endpoint.url, apiKey: "test", model: "test-model", embedModel: "test-embed" }, AssistantMemory.open(join(directory, "assistant.sqlite")), tools)
 
     assert.ok(assistant)
 
@@ -210,7 +212,7 @@ test("a tool failure answers as text the model can correct", async () => {
 
     homes.push(directory)
 
-    const assistant = Assistant.open({ baseUrl: endpoint.url, apiKey: "", model: "m" }, AssistantMemory.open(join(directory, "assistant.sqlite")), tools)
+    const assistant = Assistant.open({ baseUrl: endpoint.url, apiKey: "", embedModel: "test-embed", model: "m" }, AssistantMemory.open(join(directory, "assistant.sqlite")), tools)
 
     assert.ok(assistant)
 

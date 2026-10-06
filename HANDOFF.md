@@ -103,6 +103,15 @@ The load-bearing decision: **isolation by construction, not by filtering.**
   inside their space: `files_list/files_read/files_write` (space System
   storage root, 256 KB read cap), `programs_list`, `desktop_set_theme`
   (appearance update), `memory_remember/memory_recall` (space memory).
+- `source/server/core/assistant/rag.ts` + `embeddings.ts` + `rag-tools.ts` —
+  **built-in RAG** (2026-10-06): each space keeps `assistant-rag.sqlite`
+  (chunks + Float32 vectors, cosine-scored). Embeddings come from the SAME
+  OpenAI-compatible endpoint (`SERAPH_LLM_EMBED_MODEL`, default
+  `nomic-embed-text`); the assistant's catalog gains `files_index` (a file or
+  a whole directory, paragraph ~800-char chunks with 100-char overlap,
+  re-index replaces stale chunks) and `files_search` (top-k excerpts with
+  paths), always as the signed-in user inside their own space. No new
+  dependency; tools absent when no endpoint is configured.
 - `source/client/view/programs/seraph-chat.tsx` — the chat window; the
   Desktop renders it natively (no iframe) when a process's program name is
   `seraph` (`process-window.tsx` seam). Streams via `/assistant/chunk`

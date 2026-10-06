@@ -194,3 +194,37 @@ principal_stated_goal: "do 7" (handoff item 7: signing/provenance before distrib
 - C25 [x] e2e driver run by parent: keygen -> SERAPHOS_RELEASE_KEY-signed pack ('Signed the archive (Ed25519).') -> verify-release.ts VERIFIED exit 0; without the env var pack stays green unsigned (distribution test in verify). Configured-but-missing path asserts via pack.ts branch (exit 1).
 - C26 [x] tests/release-signing.test.mjs 6/6 by parent: round-trip, tamper, wrong-verifying-half, digest shape, 64-byte signature, malformed-sig no-throw. Tampered archive refuses; wrong verifying half refuses.
 - Scheme: Node-native Ed25519, no new dependency; sensitive half lives outside the repository (~/.seraphos), verifying half committed as the repo's own truth.
+
+# Run 7 - Built-in RAG (per-space semantic search) (2026-10-06, in progress)
+
+principal_stated_goal: 'it needs to have a built in RAG database'
+
+## Ambiguity flag (stated to the principal before building)
+- Read as: the assistant gains semantic search over the user's own Seraph files - a per-space vector index + indexing/search tools so Seraph answers from the user's documents. A separate knowledge-base program UI is NOT built. (Redirect accepted if wrong.)
+
+## Design (decided from reads)
+- ZERO new dependencies. Embeddings come from the SAME OpenAI-compatible endpoint the assistant already has (SERAPH_LLM_BASE_URL + /embeddings), model from SERAPH_LLM_EMBED_MODEL (default 'nomic-embed-text'); the tools appear only when an LLM base URL is configured (same gate as the assistant itself).
+- Storage: per-space SQLite (assistant-rag.sqlite inside the space home, like assistant.sqlite) - table chunks(id, path, ord, text, vector BLOB); cosine similarity scored in JS over the row set. Spaces hold human-scale document counts; a linear scan is correct and fast there. No ANN library: zero-dep + per-space isolation beat index fanciness at this scale.
+- Chunking: paragraph-boundary chunks of ~800 chars with 100-char overlap; stored with their file path; re-indexing a path REPLACES its chunks (delete by path then insert) - stale content never lingers.
+- Tools (join the existing seven in tools.ts): files_index(path) indexes one file or a directory recursively (text files, size-capped per chunk read), files_search(query, k) returns top-k {path, score, excerpt}. Both run as the user, inside the space - nothing cross-space reachable. Reading files reuses the same storage root as files_read.
+
+## Claims (falsifiers pending build)
+- C27: files_index on the space's storage produces retrievable chunks: index a file, search a paraphrase of its content, hit returned with its path. FALSIFIER: scripted /embeddings endpoint test asserting the hit.
+- C28: files_search returns matches ORDERED by cosine score and honors k. FALSIFIER: two files, one clearly closer, ordering asserted.
+- C29: Re-indexing a path replaces its chunks (no duplicates, stale text gone). FALSIFIER: index, rewrite file, re-index, assert count + new text only.
+- C30: Isolation holds: indexes are per-space; a second user's space cannot see another's chunks. FALSIFIER: two spaces, indexed separately, cross-search asserts nothing crosses.
+- C31: The tools degrade honestly: the rag tools are absent from the catalog when no LLM base URL is configured, and a search/index attempt in that state returns a plain error to the model. FALSIFIER: tool-catalog test + error-path test.
+- C32: Everything green: bun run verify with the new tests; no existing behavior regressed. FALSIFIER: full verify.
+
+## Anti-claims
+- No new npm dependency (no hnswlib, no embedding client SDK, no vector DB server).
+- No cross-space vector sharing or global index; privacy = per-space database like memory.
+- No silent auto-indexing of everything; indexing happens when the user's assistant asks or the desktop instructs.
+
+## Run 7 evidence (collapsed at close)
+
+- C27/C28 [x] tests/assistant-rag.test.ts: index+cosine ranking ordered hits across two files; vector/blob round-trip; k honored; embedder honors the wire's index field (scripted /embeddings).
+- C29 [x] replacement case: re-index swaps stale chunks for new (count 1->2, old excerpt absent).
+- C30 [x] isolation case via real Hub: two spaces, index written to one, the other sees zero chunks and zero hits.
+- C31 [x] catalog case: env-configured endpoint -> toolCatalog carries files_index/files_search (plus error-path text in the tool when index empty).
+- C32 [x] parent-run bun run verify: 81 files, 273/273, exit 0.

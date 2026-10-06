@@ -39,6 +39,9 @@ export interface AssistantConfigurationValues {
     apiKey: string
 
     model: string
+
+    /** The embeddings model served at the same endpoint; enables the RAG tools. */
+    embedModel: string
 }
 
 /** Reads SERAPH_LLM_* variables, with local Ollama as the silent default. */
@@ -60,9 +63,15 @@ export function assistantConfiguration(variables: NodeJS.ProcessEnv): AssistantC
 
         ?? "llama3.2"
 
+    const embedModel = environment("seraph", "LLM_EMBED_MODEL", variables).value
+
+        ?? environment("seraphos", "LLM_EMBED_MODEL", variables).value
+
+        ?? "nomic-embed-text"
+
     if (!baseUrl) return null
 
-    return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model }
+    return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model, embedModel }
 }
 
 /** One user-visible reply chunk as it streams. */
