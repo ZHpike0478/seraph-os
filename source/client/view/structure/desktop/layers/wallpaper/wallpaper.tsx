@@ -1,0 +1,241 @@
+import seedDark from "@/assets/bundled/seed-dark.webp"
+import seedLight from "@/assets/bundled/seed-light.webp"
+import sproutDark from "@/assets/bundled/sprout-dark.webp"
+import sproutLight from "@/assets/bundled/sprout-light.webp"
+import { ApplicationContext } from "@client/view/contexts"
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode, type TransitionEvent } from "react"
+import Loading from "@client/view/components/loading"
+import { useReady } from "@libs/readiness"
+import { wallpaperRequirement } from "../../../readiness-requirements"
+import { usePreferences, useTiming } from "@phreshos/react-ui"
+import { useReducedMotion } from "@libs/react-motion"
+import { cssEasing } from "@phreshos/core"
+import { wallpaperKind, type WallpaperKind } from "@shared/wallpaper"
+
+/** Where a wallpaper is shown. */
+export type WallpaperPlace = "signIn" | "desktop"
+
+/**
+ * What each place shows until its owner chooses a wallpaper: the seed before you sign in, and the
+ * release's own wallpaper once you are in. Both follow the theme.
+ */
+const bundledWallpapers: Readonly<Record<WallpaperPlace, Readonly<Record<"light" | "dark", string>>>> = {
+    signIn: { light: seedLight, dark: seedDark },
+    desktop: { light: sproutLight, dark: sproutDark }
+}
+
+type WallpaperSource = Readonly<{
+    identity: string
+    kind: WallpaperKind
+    url: string
+}>
+
+type WallpaperLayers = Readonly<{
+    displayed: WallpaperSource | null
+    incoming: WallpaperSource | null
+    switching: boolean
+}>
+
+/** Displays one completely loaded wallpaper source. */
+export function WallpaperBackground({ place, file, onReady }: WallpaperBackgroundProps) {
+    const application = ApplicationContext.useValue()
+    const { theme } = usePreferences()
+    const reducedMotion = useReducedMotion()
+    const desired = resolveWallpaper(place, file, theme, application.doors.uploads)
+    const [layers, setLayers] = useState<WallpaperLayers>({
+        displayed: null,
+        incoming: desired,
+        switching: false
+    })
+    const current = useRef(layers)
+    const frame = useRef<number | null>(null)
+
+    current.current = layers
+
+    const ready = useEffectEvent(() => onReady?.())
+
+    useEffect(() => {
+        // Both themes of this place's default, so a change of theme shows at once.
+        for (const wallpaper of Object.values(bundledWallpapers[place])) {
+            const image = new Image()
+            image.src = wallpaper
+        }
+    }, [place])
+
+    useEffect(() => {
+        cancelSwitch(frame)
+        setLayers(value => {
+            if (value.displayed?.identity === desired.identity) {
+                return value.incoming ? { displayed: value.displayed, incoming: null, switching: false } : value
+            }
+
+            if (value.incoming?.identity === desired.identity) return value
+
+            return { displayed: value.displayed, incoming: desired, switching: false }
+        })
+    }, [desired.identity])
+
+    useEffect(() => () => cancelSwitch(frame), [])
+
+    function loaded(source: WallpaperSource) {
+        const shown = current.current
+
+        if (shown.incoming?.identity !== source.identity) return
+
+        ready()
+
+        if (!shown.displayed || reducedMotion) {
+            setLayers({ displayed: source, incoming: null, switching: false })
+            return
+        }
+
+        cancelSwitch(frame)
+        frame.current = requestAnimationFrame(() => {
+            frame.current = requestAnimationFrame(() => {
+                frame.current = null
+                setLayers(value => value.incoming?.identity === source.identity
+                    ? { ...value, switching: true }
+                    : value)
+            })
+        })
+    }
+
+    function failed(source: WallpaperSource) {
+        if (current.current.incoming?.identity !== source.identity) return
+
+        setLayers(value => value.incoming?.identity === source.identity
+            ? { ...value, incoming: null, switching: false }
+            : value)
+        ready()
+    }
+
+    function transitionEnded(event: TransitionEvent<HTMLDivElement>, source: WallpaperSource) {
+        if (event.propertyName !== "opacity" || layers.incoming?.identity !== source.identity || !layers.switching) return
+        setLayers({ displayed: source, incoming: null, switching: false })
+    }
+
+    const incoming = layers.incoming
+
+    return <>
+        {layers.displayed && <WallpaperLayer
+            key={layers.displayed.identity}
+            source={layers.displayed}
+            visible
+        />}
+
+        {incoming && <WallpaperLayer
+            key={incoming.identity}
+            source={incoming}
+            visible={layers.switching}
+            onLoad={() => loaded(incoming)}
+            onError={() => failed(incoming)}
+            onTransitionEnd={event => transitionEnded(event, incoming)}
+        />}
+    </>
+}
+
+function WallpaperLayer({ source, visible, onLoad, onError, onTransitionEnd }: Readonly<{
+    source: WallpaperSource
+    visible: boolean
+    onLoad?: () => void
+    onError?: () => void
+    onTransitionEnd?: (event: TransitionEvent<HTMLDivElement>) => void
+}>) {
+    const transaction = useTiming()("change")
+    const reducedMotion = useReducedMotion()
+    const interactive = source.kind === "html" && visible
+
+    return <div
+        className={`absolute inset-0 ${interactive ? "pointer-events-auto" : "pointer-events-none"} ${visible ? "opacity-100" : "opacity-0"}`}
+        style={{
+            transitionDuration: reducedMotion ? "0ms" : String(transaction.duration) + "ms",
+            transitionTimingFunction: cssEasing(transaction.easing),
+            transitionProperty: "opacity"
+        }}
+        onTransitionEnd={onTransitionEnd}
+    >
+        {source.kind === "image" && <img
+            aria-hidden="true"
+            alt=""
+            className="h-full w-full object-cover"
+            draggable={false}
+            src={source.url}
+            onLoad={event => void event.currentTarget.decode().then(onLoad, onError)}
+            onError={onError}
+        />}
+
+        {source.kind === "video" && <video
+            aria-hidden="true"
+            className="h-full w-full object-cover"
+            src={source.url}
+            autoPlay
+            loop
+            muted
+            playsInline
+            preload="auto"
+            onCanPlay={onLoad}
+            onError={onError}
+        />}
+
+        {source.kind === "html" && <iframe
+            className="h-full w-full border-0"
+            src={source.url}
+            title="Wallpaper"
+            sandbox="allow-scripts"
+            referrerPolicy="no-referrer"
+            onLoad={onLoad}
+            onError={onError}
+        />}
+    </div>
+}
+
+function resolveWallpaper(place: WallpaperPlace, file: string | null, theme: "light" | "dark", uploads: string): WallpaperSource {
+    if (file === null) return { identity: `bundled:${place}:${theme}`, kind: "image", url: bundledWallpapers[place][theme] }
+
+    const kind = wallpaperKind(file) ?? "image"
+    const path = kind === "html" ? `${uploads}/wallpaper/${encodeURIComponent(file)}` : `${uploads}/${encodeURIComponent(file)}`
+
+    return { identity: `${kind}:${file}`, kind, url: path }
+}
+
+function cancelSwitch(frame: { current: number | null }) {
+    if (frame.current === null) return
+
+    cancelAnimationFrame(frame.current)
+    frame.current = null
+}
+
+/** A complete surface whose content sits above one file-backed wallpaper. */
+export function WallpaperStage({ place, file, children }: WallpaperStageProps) {
+    const [readyFile, setReadyFile] = useState<string | null>()
+    const ready = readyFile === file
+
+    return <div className="relative isolate grid min-h-0">
+        <WallpaperBackground place={place} file={file} onReady={() => setReadyFile(file)} />
+
+        <div className="pointer-events-none relative z-1 grid min-h-0">
+            {children}
+        </div>
+
+        {!ready && <Loading />}
+        {ready && <ReadyWallpaper />}
+    </div>
+}
+
+export function ReadyWallpaper() {
+    useReady(wallpaperRequirement)
+
+    return null
+}
+
+interface WallpaperStageProps {
+    place: WallpaperPlace
+    file: string | null
+    children: ReactNode
+}
+
+interface WallpaperBackgroundProps {
+    place: WallpaperPlace
+    file: string | null
+    onReady?: () => void
+}

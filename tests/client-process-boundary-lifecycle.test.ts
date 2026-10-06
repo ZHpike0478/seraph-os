@@ -1,0 +1,144 @@
+import assert from "node:assert/strict"
+import messagepack from "@the-link/messagepack"
+import ClientProcessBoundary, { ClientFrame, frameMovePoint } from "@client/view/components/desktop-host/client-process-boundary"
+import type AuthManager from "@client/core/link-manager/auth-manager/auth-manager"
+import type ClientTraffic from "@client/view/components/desktop-host/client-traffic"
+import type { PresentationHost } from "@client/view/components/desktop-host/presentation"
+import { test, vi } from "vitest"
+
+test("frame pointer positions map into the Desktop's physical viewport space", () => {
+    let left = 100
+    const frame = {
+        clientWidth: 400,
+        clientHeight: 300,
+        getBoundingClientRect: () => ({ left, top: 50, width: 600, height: 450 })
+    } as HTMLIFrameElement
+
+    assert.deepEqual(frameMovePoint(frame, { x: 40, y: 20 }), { x: 160, y: 80 })
+
+    const clientFrame = new ClientFrame(frame)
+    assert.deepEqual(clientFrame.point({ x: 40, y: 20 }), { x: 160, y: 80 })
+    left = 240
+    assert.deepEqual(clientFrame.point({ x: -50, y: 30 }), { x: 165, y: 95 })
+})
+
+test("a Client question expectation survives initial iframe ownership", async () => {
+
+    const sent: unknown[][] = []
+    const element = {
+        contentWindow: {
+            postMessage(message: unknown[]) {
+
+                sent.push(messagepack.deserialize(message[0] as Uint8Array) as unknown[])
+            }
+        }
+    } as unknown as HTMLIFrameElement
+    const authManager = {
+        processManager: {
+            async ownFrame() {},
+            async releaseFrame() {}
+        }
+    } as unknown as AuthManager
+    const boundary = new ClientProcessBoundary(
+        "process",
+        element,
+        authManager,
+        { state: () => ({ size: { width: 800, height: 600 }, offset: { x: 0, y: 0 } }), move: () => undefined },
+        {} as never,
+        {} as ClientTraffic,
+        { begin() {} } as unknown as PresentationHost
+    )
+    const question = "client:process:question"
+
+    boundary.receive(["boundary", "expect", question])
+
+    await boundary.own("document")
+    await boundary.deliver("end-end", "answer", question, "public-question", "read", { success: true, result: 4 })
+
+    assert.deepEqual(sent, [["end-end", "answer", question, "public-question", "read", { success: true, result: 4 }]])
+})
+
+test("a later Client request cannot overtake its Service subscription registration", async () => {
+
+    let completeFollow!: () => void
+    const following = new Promise<void>(resolve => { completeFollow = resolve })
+    const order: string[] = []
+    const processManager = {
+        processes: new Map([["process", { program: "flambo" }]]),
+        async ownFrame() {},
+        async releaseFrame() {},
+        async followService() {
+            order.push("follow:start")
+            await following
+            order.push("follow:end")
+        },
+        async askService() { order.push("ask") }
+    }
+    const authManager = {
+        programManager: { programs: new Map([["flambo", { identity: "flambo", permissions: { services: [] } }]]) },
+        processManager,
+    } as unknown as AuthManager
+    const boundary = new ClientProcessBoundary(
+        "process",
+        { contentWindow: null } as unknown as HTMLIFrameElement,
+        authManager,
+        { state: () => ({ size: { width: 800, height: 600 }, offset: { x: 0, y: 0 } }), move: () => undefined },
+        {} as never,
+        {} as ClientTraffic,
+        { begin() {} } as unknown as PresentationHost
+    )
+    const address = { program: "flambo", process: "browser-server", endpoint: "server" } as const
+
+    await boundary.own("document")
+    boundary.receive(["end-host", "service-follow", "subscription", address, "events", "workspace.change", false])
+    boundary.receive(["end-host", "service-ask", address, "question", "public-question", "workspace.attach", {}])
+
+    await vi.waitFor(() => assert.deepEqual(order, ["follow:start"]))
+    completeFollow()
+    await vi.waitFor(() => assert.deepEqual(order, ["follow:start", "follow:end", "ask"]))
+})
+
+test("a registered Service event is delivered without a second permission round-trip", async () => {
+
+    const sent: unknown[][] = []
+    let followed = false
+    const address = { program: "browser", process: "browser", endpoint: "server" } as const
+    const processManager = {
+        processes: new Map([["process", { program: "browser" }]]),
+        async ownFrame() {},
+        async releaseFrame() {},
+        async followService() { followed = true }
+    }
+    const authManager = {
+        programManager: { programs: new Map([["browser", { identity: "browser", permissions: { services: [] } }]]) },
+        processManager,
+    } as unknown as AuthManager
+    const traffic = {
+        observe() { return () => undefined }
+    } as unknown as ClientTraffic
+    const element = {
+        contentWindow: {
+            postMessage(message: unknown[]) {
+                sent.push(messagepack.deserialize(message[0] as Uint8Array) as unknown[])
+            }
+        }
+    } as unknown as HTMLIFrameElement
+    const boundary = new ClientProcessBoundary(
+        "process",
+        element,
+        authManager,
+        { state: () => ({ size: { width: 800, height: 600 }, offset: { x: 0, y: 0 } }), move: () => undefined },
+        {} as never,
+        traffic,
+        { begin() {} } as unknown as PresentationHost
+    )
+
+    await boundary.own("document")
+    boundary.receive(["boundary", "subscribe", "wire-subscription", "publish", "service-event", "service-subscription", null, false])
+    boundary.receive(["end-host", "service-follow", "service-subscription", address, "events", "workspace.changed", false])
+    await vi.waitFor(() => assert.equal(followed, true))
+
+    await boundary.deliver("service-event", "service-subscription", { revision: 1 })
+
+    assert.deepEqual(sent, [["service-event", "service-subscription", { revision: 1 }]])
+})

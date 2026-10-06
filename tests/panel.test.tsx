@@ -1,0 +1,102 @@
+import assert from "node:assert/strict"
+import type { ReactNode } from "react"
+import { renderToStaticMarkup } from "react-dom/server"
+import { defaultAppearance } from "@phreshos/core"
+import { resolveRadius, UIProvider } from "@phreshos/react-ui"
+import CredentialsForm from "@client/view/structure/authentication/credentials-form"
+import ShellSurface, { shellSurfaceClassName } from "@client/view/structure/desktop/layers/shell/shell-surface"
+import Window from "@client/view/structure/desktop/windows/window"
+import Taskbar from "@client/view/structure/desktop/layers/shell/taskbar/taskbar"
+import { ApplicationContext } from "@client/view/contexts"
+import Application from "@client/core/application"
+import { test } from "vitest"
+import { name, version } from "@/source/identity"
+
+test("panel contract", async () => {
+  const application = new Application({
+      link: "/link",
+      proxy: "/proxy",
+      storage: "/storage",
+      uploads: "/uploads",
+      program: "/program"
+  })
+
+  function markup(children: ReactNode) {
+      return renderToStaticMarkup(<ApplicationContext.Provider value={application}>
+          <UIProvider appearance={defaultAppearance} preferences={{ theme: "light", animations: true }}>{children}</UIProvider>
+      </ApplicationContext.Provider>)
+  }
+
+  function panel(html: string, materials = 2) {
+      assert.equal(html.match(/class="[^"]*phreshos-surface[^"]*"/g)?.length, materials)
+      assert.match(html, /grid-template-rows:auto minmax\(0, 1fr\)/)
+      assert.match(html, /margin:6px;margin-top:0/)
+  }
+
+  const shell = markup(<ShellSurface label="Title" labelId="title"><button>Action</button></ShellSurface>)
+  panel(shell)
+  assert.match(shell, /<h2 id="title"/)
+  assert.match(shell, /<button>Action<\/button>/)
+
+  const window = markup(<Window layer="window" icon="/icon.svg" title="Window"><iframe title="Content" /></Window>)
+  assert.equal(window.match(/class="[^"]*phreshos-surface[^"]*"/g)?.length, 1)
+  assert.match(window, /grid-template-rows:auto minmax\(0, 1fr\)/)
+  assert.match(window, /data-window-content="true"/)
+  assert.doesNotMatch(window, /border-top:1px solid yellow/)
+  assert.doesNotMatch(window, /margin:6px;margin-top:0/)
+  assert.match(window, /data-window-container/)
+  assert.match(window, /<iframe title="Content"/)
+  assert.doesNotMatch(window, /class="p-px"/)
+  const windowPanel = window.match(/<div style="([^"]*grid-template-rows:auto minmax\(0, 1fr\)[^"]*)">/)?.[1] ?? ""
+  assert.match(windowPanel, /overflow:hidden/)
+  assert.match(windowPanel, new RegExp(`border-radius:${resolveRadius("medium", defaultAppearance.radius)}`))
+
+  const bare = markup(<Window layer="over" icon="/icon.svg" title="Bare"><iframe title="Content" /></Window>)
+  assert.doesNotMatch(bare, /class="[^"]*phreshos-surface[^"]*"/)
+  assert.doesNotMatch(bare, /grid-template-rows:auto minmax\(0, 1fr\)/)
+
+  const passThrough = markup(<Window layer="over" icon="/icon.svg" title="Pass-through" interactive={false}><iframe title="Content" /></Window>)
+  assert.match(passThrough, /pointer-events-none/)
+  assert.match(passThrough, /inert=""/)
+
+  const authentication = markup(<CredentialsForm title="Sign in" description="Welcome" submitLabel="Continue" passwordAutocomplete="current-password" pending={false} onSubmit={() => {}} />)
+  // A welcome card, not a Panel: one raised card holding two recessed fields and the button.
+  assert.equal(authentication.match(/class="[^"]*phreshos-surface[^"]*"/g)?.length, 4)
+  assert.doesNotMatch(authentication, /grid-template-rows:auto minmax\(0, 1fr\)/)
+  assert.equal(authentication.match(/<form\b/g)?.length, 1)
+  assert.match(authentication, /<form[^>]*noValidate=""/)
+  assert.match(authentication, /name="username"/)
+  assert.match(authentication, /name="password"/)
+  assert.match(authentication, /<label[^>]*>Username<\/label>/)
+  assert.match(authentication, /<label[^>]*>Password<\/label>/)
+  assert.match(authentication, /type="submit"/)
+  assert.match(authentication, /<h1[^>]*>Sign in<\/h1>/)
+  assert(authentication.includes(`${name} version ${version}`))
+  assert.doesNotMatch(authentication, /backdrop-blur/)
+
+  const authenticationError = markup(<CredentialsForm title="Sign up" description="Welcome" submitLabel="Continue" passwordAutocomplete="new-password" pending={false}
+      requirements={{ username: { minimumLength: 1, maximumLength: 64 }, password: { minimumLength: 8, maximumLength: 1024 } }}
+      error={{ target: "password", message: "Use a stronger password." }} onSubmit={() => {}} />)
+  assert.match(authenticationError, /<input(?=[^>]*name="password")(?=[^>]*aria-invalid="true")/)
+  assert.match(authenticationError, /Use a stronger password\./)
+  assert.match(authenticationError, /<button(?=[^>]*disabled="")(?=[^>]*type="submit")/)
+
+  const authenticationFailure = markup(<CredentialsForm title="Sign in" description="Welcome" submitLabel="Continue" passwordAutocomplete="current-password" pending={false}
+      error={{ target: "form", message: "The request failed." }} onSubmit={() => {}} />)
+  assert.match(authenticationFailure, /role="alert"/)
+  assert.match(authenticationFailure, /The request failed\./)
+
+  // Independent Shell overlays share a non-clipping host for outer effects.
+  assert(shellSurfaceClassName.split(" ").includes("overflow-visible"))
+
+  const taskbar = markup(<Taskbar
+      leading={<button>Start</button>}
+      trailing={<button>Sign out</button>}
+      taskbar={{ position: "bottom", size: 44, overlay: false }}
+      spacing={8}
+  ><button>Window</button></Taskbar>)
+  assert.match(taskbar, /role="toolbar"/)
+  assert.match(taskbar, /aria-label="Taskbar"/)
+  assert.match(taskbar, /aria-orientation="horizontal"/)
+
+}, 120_000)

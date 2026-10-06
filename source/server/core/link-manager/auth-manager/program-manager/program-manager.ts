@@ -1,0 +1,1748 @@
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { Subscribe } from "@the-link/core/decorators"
+import { TheLink } from "@the-link/core"
+import SqliteDatabase from "@libs/sqlite-database"
+import FileManager from "@libs/file-manager"
+import FileArea from "@libs/file-area"
+import ProgramStoreState, { type StoreSnapshot } from "./program-store"
+import AuthManager from "../auth-manager"
+import { dirname, isAbsolute, join } from "node:path"
+import { isDeepStrictEqual } from "node:util"
+import Logs, { type LogSource } from "./logs"
+import { isValue, layers } from "./config"
+import { parseLaunch, withProcessDefaults, parseProgramDefinition, parseProgramInstallOptions, parseProgramUninstallOptions, parseRelativeValue, type ProgramInstallOptions, type ProgramUninstallOptions, type ClientLaunch, type Launch, type Position, type ProgramCommandChunk, type ProgramDefinition, type Size, type Value } from "@phreshos/core"
+import type { OpenTarget } from "@phreshos/core"
+import { type default as Process, type ProcessLaunch, type Stream } from "../process-manager/process"
+import { type StandardShape } from "../process-manager/process-manager"
+import Program, { type CommandOutput, type InstallOutput } from "./program"
+import Entry, { type ProgramRecord } from "./entry"
+import { isIconSize, ProgramIcons } from "./icon"
+import { permissionCatalog } from "@server/core/permissions"
+import ProgramStateStorage from "./state"
+import {
+    parsePermissionName,
+    type Permission,
+    type PermissionInput,
+    type PermissionName,
+    type PermissionRequestInput,
+    type PermissionValue,
+    type Permissions
+} from "@phreshos/core"
+import shortIdentity from "@libs/short-identity"
+
+const maximumProcessesPerProgram = 20
+
+type Registration = {
+    installed: boolean
+    transitionOwnsIdentity?: boolean
+    restoreInstalled?: boolean
+}
+
+function clonePermission<Name extends PermissionName>(permission: Permission<Name>): Permission<Name> {
+
+    return Array.isArray(permission) ? [...permission] : permission
+}
+
+function clonePermissions(permissions: Permissions): Permissions {
+
+    return Object.fromEntries(Object.entries(permissions).map(([name, permission]) => [name, clonePermission(permission)]))
+}
+
+/**
+ * Every program this runtime knows, in one map keyed by its public
+ * identity. Installation is a flag on the record; it changes persistence,
+ * never which collection contains the program.
+ */
+export default class ProgramManager extends TheLink {
+
+    public readonly authManager: AuthManager
+
+    public readonly fileManager: FileManager
+
+    public readonly programs = new Map<string, Entry>()
+
+    // One lifecycle transition per public identity. Besides preventing
+    // two installs from replacing the same files at once, this keeps an
+    // identity reserved until its final forget announcement has crossed
+    // the trusted link. A new occupant can therefore never be erased by
+    // the previous occupant's late echo.
+    private readonly changing = new Map<string, Promise<void>>()
+
+    // Named convergence and ordinary creation share one Program-local queue.
+    // This keeps find-or-create atomic even when another caller uses create.
+    private readonly creating = new Map<string, Promise<void>>()
+
+    private readonly commands = new Map<string, () => void>()
+
+    // What each program remembers about itself, opened on first use and
+    // kept by the identity of the program that asked.
+    private readonly opened = new Map<string, ProgramStoreState>()
+
+    // What each program's halves have said. Opened like the store above
+    // and dropped in the same place, because it is the same kind of
+    // thing: kept under `storage`, managed by the system, with no word
+    // in the program's own vocabulary for writing it.
+    private readonly said = new Map<string, Logs>()
+
+    // And each program's own database — the third file under `storage`,
+    // and the only one of the three the program writes itself.
+    private readonly kept = new Map<string, SqliteDatabase>()
+
+    private readonly icons: ProgramIcons
+
+    public constructor(authManager: AuthManager) {
+
+        super()
+
+        this.fileManager = authManager.linkManager.application.storage.navigateTo("programs")
+
+        this.authManager = authManager
+
+        this.icons = new ProgramIcons(authManager.linkManager.application.icons.defaultProgram)
+
+        this.connectTo(this.authManager, "/program")
+    }
+
+    /** Reconstruct every valid installed Program before the host is exposed. */
+    public async initialize() {
+
+        // What the system laid out, it can find again — by name, which is
+        // what the directory is. A directory that no longer holds a
+        // program is left where it is rather than guessed at.
+        for (const found of readdirSync(this.fileManager.path, { withFileTypes: true })) {
+
+            if (!found.isDirectory()) continue
+
+            const declaration = this.fileManager.join(found.name, "program.json")
+
+            if (!existsSync(declaration)) continue
+
+            try {
+
+                await this.register(new Program(declaration), { installed: true, transitionOwnsIdentity: true })
+            }
+
+            catch (exception) { console.log(`programs: ${found.name} was not read — ${exception instanceof Error ? exception.message : "unreadable"}`) }
+        }
+
+        // Registration establishes the complete Program registry first. Read
+        // every startup declaration before executing any of them as well, so
+        // one early Server cannot rewrite what a later Program was going to do
+        // during this same boot.
+        const starting: [Program, Launch][] = []
+
+        for (const entry of this.programs.values()) {
+
+            try {
+
+                const launch = await this.startup(entry.program, "get")
+
+                if (launch) starting.push([entry.program, launch])
+            }
+
+            catch (exception) { console.log(`programs: ${entry.identity} did not start — ${exception instanceof Error ? exception.message : "unreadable startup settings"}`) }
+        }
+
+        // One invalid or impossible launch cannot prevent its neighbours or
+        // the system itself from starting.
+        for (const [program, launch] of starting) {
+
+            try { await this.start(program, launch) }
+
+            catch (exception) { console.log(`programs: ${program.identity} did not start — ${exception instanceof Error ? exception.message : "invalid startup settings"}`) }
+        }
+
+    }
+
+    public find(identity: string) {
+
+        const entry = this.programs.get(identity)
+
+        if (!entry) throw new Error("The system does not know this program")
+
+        return entry
+    }
+
+    /** Resolve one permission from state first, then the Program definition. */
+    public permission<Name extends PermissionName>(program: Program, name: Name): Permission<Name> {
+
+        return clonePermission(this.permissions(program)[name] ?? null)
+    }
+
+    /** Returns an independent effective snapshot without writing definition fallbacks to state. */
+    public permissions(program: Program): Permissions {
+
+        const entry = this.programs?.get(program.identity)
+
+        if (entry?.program === program) return entry.permissions()
+
+        return this.resolvePermissions(program)
+    }
+
+    private resolvePermissions(program: Program): Permissions {
+
+        return clonePermissions({ ...program.declaredPermissions, ...new ProgramStateStorage(program).permissions() })
+    }
+
+    /** Tests one requested value against this Program's effective permissions. */
+    public allowsPermission<Name extends PermissionName>(
+        program: Program,
+        name: Name,
+        input: PermissionRequestInput<Name> = true
+    ) {
+
+        const requested = permissionCatalog.resolve(name, input)
+
+        if (!Array.isArray(requested)) throw new Error("A permission check must be true or a list of values")
+
+        const permissions = this.permissions(program)
+
+        return permissionCatalog.allows(
+            name,
+            requested,
+            permissions
+        )
+    }
+
+    /** Tests one request against this Program's effective permission. */
+    public grantsPermission<Name extends PermissionName>(
+        program: Program,
+        name: Name,
+        requested: readonly PermissionValue<Name>[]
+    ) {
+
+        return permissionCatalog.allows(
+            name,
+            requested,
+            this.permissions(program)
+        )
+    }
+
+    /** Tests one native Storage operation against this Program's authority. */
+    public grantsStorage(program: Program, path: string, operation?: "read" | "write" | "delete") {
+
+        return permissionCatalog.allowsStorage(
+            this.permission(program, "all"),
+            this.permission(program, "storage"),
+            path,
+            operation
+        )
+    }
+
+    /** Stores one canonical permission and propagates its access change. */
+    public async setPermission<Name extends PermissionName>(
+        program: Program,
+        name: Name,
+        value: Exclude<PermissionInput<Name>, null>
+    ): Promise<void> {
+
+        if (value === null) throw new Error("A stored Program permission cannot be null")
+
+        const entry = this.programs?.get(program.identity)
+        if (entry && entry.program !== program) throw new Error("The Program represented by this handle does not exist")
+
+        const before = entry?.permissions() ?? this.resolvePermissions(program)
+        const state = new ProgramStateStorage(program)
+        const stored = state.permissions()
+        const permission = permissionCatalog.resolve(name, value)
+        if (permission === null) throw new Error("A stored Program permission cannot be null")
+        const previousStored = stored[name]
+
+        if (previousStored !== undefined && !permissionCatalog.changed(previousStored, permission)) return
+
+        state.setPermission(name, permission)
+
+        const after = this.resolvePermissions(program)
+        entry?.updatePermissions(after)
+
+        // Permission events carry one complete effective snapshot. Consumers
+        // can replace local authority atomically instead of reconstructing it
+        // from mutation history or issuing a follow-up read.
+        if (entry && !isDeepStrictEqual(before, after)) await this.announcePermissions(entry)
+    }
+
+    private async announcePermissions(entry: Entry) {
+
+        const permissions = entry.permissions()
+
+        await Promise.all([
+            this.authManager.processManager.announceHost("program", entry.identity, "permissions", entry.identity, entry),
+            this.authManager.processManager.announceSubject("program", entry.identity, "permissions", entry.program.reference, permissions),
+            this.$outbound.publish("/permissions-change", entry.record())
+        ])
+    }
+
+    @Subscribe("/permissions")
+    protected async programPermissions(subject: unknown, operation: unknown, first?: unknown, second?: unknown) {
+
+        const program = this.held(subject)
+
+        if (operation === "all") return this.permissions(program)
+        if (operation === "get") return this.permission(program, parsePermissionName(first))
+        if (operation === "allows") {
+
+            const permission = parsePermissionName(first)
+
+            return this.allowsPermission(program, permission, second as PermissionRequestInput<typeof permission>)
+        }
+        if (operation === "allow") {
+
+            const permission = parsePermissionName(first)
+
+            await this.setPermission(program, permission, second as PermissionRequestInput<typeof permission>)
+
+            return
+        }
+        if (operation === "deny") {
+
+            await this.setPermission(program, parsePermissionName(first), false)
+
+            return
+        }
+        throw new Error(`The System does not know the Program permission operation "${String(operation)}"`)
+    }
+
+    @Subscribe("/create-program")
+    protected async createProgram(source: ProgramDefinition | string) {
+
+        return (await this.create(source)).identity
+    }
+
+    @Subscribe("/force-create-program")
+    protected async forceCreateProgram(source: ProgramDefinition | string, asker: string) {
+
+        return (await this.forceCreate(source, asker)).identity
+    }
+
+    @Subscribe("/startup")
+    protected async startupProgram(subject: unknown, operation: string, value?: unknown) {
+
+        return await this.startup(this.held(subject), operation, value)
+    }
+
+    @Subscribe("/pinned")
+    protected async pinnedProgram(subject: unknown, operation: "get" | "pin" | "unpin") {
+
+        return await this.pinned(this.held(subject), operation)
+    }
+
+    public reach(identity: string) {
+
+        return this.programs.get(identity)?.program ?? null
+    }
+
+    /** Resolves the runtime Program that owns one browser asset address. */
+    public fromAsset(assetId: string) {
+
+        return [...this.programs.values()].find(entry => entry.program.assetId === assetId)?.program ?? null
+    }
+
+    /** Resolve an exact runtime Program handle without retargeting a replacement. */
+    public held(value: unknown) {
+
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("A Program handle is required")
+
+        const address = value as { identity?: unknown, reference?: unknown }
+        const program = typeof address.identity === "string" ? this.reach(address.identity) : null
+
+        if (!program || program.reference !== address.reference) throw new Error("The Program represented by this handle does not exist")
+
+        return program
+    }
+
+    // A program created in memory. From the moment it exists it is an
+    // ordinary record in the same runtime registry as every installed
+    // program. Only its installed flag differs, so it survives no
+    // restart unless it is installed.
+    //
+    // Everything it names must be absolute. An object's relative paths
+    // resolve against the system's own working directory, which is
+    // decided by whoever started the system and means nothing to the
+    // program that called this — a launched program once wrote storage
+    // into a repository through exactly that resolution. A path form
+    // resolves against the program.json it names, so it only has to be
+    // absolute itself.
+    public async create(source: ProgramDefinition | string) {
+
+        const entry = await this.register(this.runtimeProgram(source), { installed: false })
+
+        await this.created(entry)
+
+        return entry.program
+    }
+
+    /** Atomically replace the runtime occupant of one Program identity. */
+    public async forceCreate(source: ProgramDefinition | string, asker: string | null = null) {
+
+        const program = this.runtimeProgram(source)
+
+        const restoreInstalled = existsSync(this.fileManager.join(program.identity, "program.json"))
+
+        // Refuse an invalid replacement before disturbing the coherent entity
+        // that currently owns this public identity.
+        await program.validate()
+
+        this.installLaunch(program)
+
+        return await this.change(program.identity, async () => {
+
+            const existing = this.programs.get(program.identity)
+
+            if (existing) {
+
+                await this.authManager.processManager.exitAll(existing.identity, asker)
+
+                await this.forgetEntry(existing, false)
+            }
+
+            const entry = this.remember(program, { installed: false, transitionOwnsIdentity: true, restoreInstalled })
+
+            try {
+
+                await this.created(entry)
+
+                return entry.program
+            }
+
+            catch (exception) {
+
+                if (this.programs.get(entry.identity) === entry) await this.forgetEntry(entry)
+
+                throw exception
+            }
+        })
+    }
+
+    /** Resolve one external runtime source without consulting System cwd. */
+    private runtimeProgram(source: ProgramDefinition | string) {
+
+        if (typeof source === "string") {
+
+            if (!isAbsolute(source)) throw new Error("A program is created from an absolute path — the system's working directory is not the caller's")
+
+            const path = statSync(source, { throwIfNoEntry: false })?.isDirectory() ? join(source, "program.json") : source
+
+            return new Program(path)
+        }
+
+        const definition = parseProgramDefinition(source)
+
+        // Storage is where what it keeps outlives its processes, and
+        // "absent means the system decides" is an installed program's
+        // deal — the system has no directory to decide for a program it
+        // is not holding on disk.
+        if (typeof definition.storage !== "string") throw new Error("A created program names its storage")
+
+        for (const [what, place] of [["storage", definition.storage], ["icon", definition.icon], ["agent", definition.agent], ["server", definition.server?.location]] as const) {
+
+            if (place === undefined) continue
+
+            if (!isAbsolute(place)) throw new Error(`A created program's ${what} must be an absolute filesystem path`)
+        }
+
+        const client = definition.client?.location
+
+        if (client !== undefined && !/^https?:\/\//i.test(client) && !isAbsolute(client)) throw new Error("A created program's client must be an absolute filesystem path or an HTTP(S) URL")
+
+        return new Program(definition)
+    }
+
+    private async register(program: Program, registration: Registration) {
+
+        await program.validate()
+        this.installLaunch(program)
+
+        return this.remember(program, registration)
+    }
+
+    /** Commit one already validated Program to the authoritative registry. */
+    private remember(program: Program, { installed, transitionOwnsIdentity = false, restoreInstalled = false }: Registration) {
+
+        // The runtime map is the live registry, while an installed
+        // definition is the durable reservation reconstructed on boot.
+        // Forgetting an installed Program removes the former but cannot
+        // make its identity available to ordinary creation while the
+        // latter still exists. Attached replacement is the one transition
+        // that deliberately owns this identity across both representations.
+        if (this.programs.has(program.identity) || (!transitionOwnsIdentity && (this.changing.has(program.identity) || existsSync(this.fileManager.join(program.identity, "program.json"))))) throw new Error("The system already knows this program identity")
+
+        const entry = new Entry(program, this.resolvePermissions(program), installed, restoreInstalled)
+
+        this.programs.set(entry.identity, entry)
+
+        return entry
+    }
+
+    // Creation is one fact about a Program, emitted after it enters the
+    // map and before any of its processes can be created. Installed
+    // programs reconstructed in the constructor are initial state, not
+    // replayed event history, so only runtime registrations use this.
+    private async created(entry: Entry) {
+
+        await this.authManager.processManager.announceHost("program", entry.identity, "create", entry.identity, entry)
+
+        await this.$outbound.publish("/create", entry.record())
+    }
+
+    private async change<T>(identity: string, operation: () => Promise<T>) {
+
+        if (this.changing.has(identity)) throw new Error("This program is already changing")
+
+        let finish: () => void = () => undefined
+
+        // What observers await is the whole transition, including releasing
+        // the identity lock. Awaiting the operation alone allowed an attached
+        // exit to resume in the narrow interval before `finally` removed it.
+        const changing = new Promise<void>(settle => { finish = settle })
+
+        this.changing.set(identity, changing)
+
+        try { return await operation() }
+
+        finally {
+
+            if (this.changing.get(identity) === changing) this.changing.delete(identity)
+
+            finish()
+        }
+    }
+
+    private async serializeCreation<T>(identity: string, operation: () => Promise<T>) {
+
+        const previous = this.creating.get(identity) ?? Promise.resolve()
+
+        let finish: () => void = () => undefined
+
+        const pending = new Promise<void>(settle => { finish = settle })
+
+        const creating = previous.catch(() => undefined).then(() => pending)
+
+        this.creating.set(identity, creating)
+
+        await previous.catch(() => undefined)
+
+        try { return await operation() }
+
+        finally {
+
+            finish()
+
+            if (this.creating.get(identity) === creating) this.creating.delete(identity)
+        }
+    }
+
+    // A place is made when it is first wanted, which is also when a
+    // program has something to put in it. Metadata and content meet in
+    // this object even though their transports differ.
+    private areaOf(program: Program, area: Area) {
+
+        return new FileArea(join(program.storagePath, area), `this program's ${area}`)
+    }
+
+    // A program's own store, kept beside what it keeps.
+    private storeOf(program: Program) {
+
+        const already = this.opened.get(program.identity)
+
+        if (already) return already
+
+        const store = new ProgramStoreState(program.storagePath, (key, snapshot) => {
+            // The System is the only publisher; endpoint adapters must consume, never echo, this fact.
+            this.authManager.processManager.announceSubject("program", program.identity, "storeChange", program.reference, key, snapshot).catch(() => undefined)
+            this.$outbound.publish("/store-change", program.reference, key, snapshot).catch(() => undefined)
+        })
+
+        this.opened.set(program.identity, store)
+
+        return store
+    }
+
+    // What this program has said. Its own file under `storage`, so it
+    // survives an update and is removed by purge.
+    public logsOf(program: Program) {
+
+        const already = this.said.get(program.identity)
+
+        if (already) return already
+
+        const logs = new Logs(join(program.storagePath, "logs.sqlite"), record => {
+
+            // Persistence owns the fact; the boundaries only forward the
+            // post-commit record to observers that are authorized to see it.
+            this.$outbound.publish("/log", program.reference, record).catch(() => undefined)
+
+            this.authManager.processManager.announceSubject("programLog", program.identity, "log", program.reference, record).catch(() => undefined)
+        })
+
+        this.said.set(program.identity, logs)
+
+        return logs
+    }
+
+    // A log emission is not an operation the producer waits for. The Program's
+    // own storage is authoritative whether that Program is installed or is an
+    // attached authoring run.
+    public record(program: Program, process: string, source: LogSource, kind: string, content: string) {
+
+        this.logsOf(program).record(process, source, kind, content)
+    }
+
+    // Read, and only ever read. The same word a process says over its
+    // channel and a pane says over the link, because the two roads must
+    // mean the same thing.
+    @Subscribe("/logs")
+    public async logs(subject: unknown, sql: string, values: unknown[]) {
+
+        return this.logsOf(this.held(subject)).query(sql, values)
+    }
+
+    // A program's own database, opened on first use like the managed files
+    // beside it. Its schema belongs entirely to the program: the system
+    // supplies SQLite without creating tables or inventing another query
+    // language. A separate file keeps that authority structurally apart from
+    // the store and logs the system manages for the same program.
+    public databaseOf(program: Program) {
+
+        const already = this.kept.get(program.identity)
+
+        if (already) return already
+
+        const database = new SqliteDatabase(join(program.storagePath, "database.sqlite"))
+
+        this.kept.set(program.identity, database)
+
+        return database
+    }
+
+    // Read and written both: this file is the program's own, which is
+    // the whole of why it is a file of its own.
+    @Subscribe("/database")
+    public async database(subject: unknown, sql: string, values: unknown[]) {
+
+        return this.databaseOf(this.held(subject)).query(sql, values)
+    }
+
+    /** One authoritative icon operation shared by SDKs and HTTP hosting. */
+    @Subscribe("/icon")
+    public async icon(subject: unknown, size: unknown) {
+
+        if (!isIconSize(size)) throw new Error("A Program icon size is small, medium, or large")
+
+        return [...await this.icons.render(this.held(subject), size)]
+    }
+
+    /** Reads Program-specific operating knowledge for agents. */
+    @Subscribe("/agent")
+    public async agent(subject: unknown) {
+
+        return this.held(subject).agent()
+    }
+
+    /** Reads the canonical definition owned by one exact Program handle. */
+    @Subscribe("/definition")
+    public async definition(subject: unknown) {
+
+        return this.held(subject).definition()
+    }
+
+    /** Resolve the one launch owned by installation without persisting it as Program state. */
+    private installLaunch(program: Program) {
+        const value = program.config.installLaunch
+        if (value === undefined) return undefined
+        const launch = parseLaunch(value === true ? {} : value)
+        this.resolveLaunch(program, launch)
+        return launch
+    }
+
+    /** Read, set, or remove the one launch a Program starts when the System starts. */
+    public async startup(program: Program, operation: string, value?: unknown): Promise<Launch | null | void> {
+
+        const state = new ProgramStateStorage(program)
+
+        if (operation === "get") {
+
+            const launch = state.startup()
+
+            if (launch === null) return null
+
+            this.resolveLaunch(program, launch)
+
+            return launch
+        }
+
+        if (operation === "set") {
+
+            await program.validate()
+
+            const launch = parseLaunch(value === undefined ? {} : value)
+            this.resolveLaunch(program, launch)
+
+            // Startup is a resulting state: repeating the same request must
+            // not rewrite system-managed Program state.
+            if (isDeepStrictEqual(state.startup(), launch)) return
+            state.setStartup(launch)
+
+            return
+        }
+
+        if (operation === "remove") {
+
+            if (state.startup() === null) return
+            state.setStartup(null)
+
+            return
+        }
+
+        throw new Error(`The host does not know the startup operation "${operation}"`)
+    }
+
+    /** Read or change the pinned state and publish only effective transitions. */
+    public async pinned(program: Program, operation: "get" | "pin" | "unpin"): Promise<boolean> {
+        const state = new ProgramStateStorage(program)
+        const current = state.pinned()
+        if (operation === "get") return current
+
+        const pinned = operation === "pin"
+        if (current === pinned) return current
+
+        state.setPinned(pinned)
+        const entry = this.find(program.identity)
+        await this.authManager.processManager.announceHost("program", entry.identity, "pinned", entry.identity, entry, pinned)
+        await this.$outbound.publish("/pinned", entry.record(), pinned)
+        return pinned
+    }
+
+    // A store's controls, in one place. Reached from a process
+    // over its own channel and from a session over the link, and both
+    // must mean the same thing. The exact handle always names a Program;
+    // application persistence has no generic route through this manager.
+    @Subscribe("/store")
+    public async store(subject: unknown, operation: string, key: string, value?: unknown, ttl?: unknown) {
+
+        const store = this.storeOf(this.held(subject))
+
+        if (operation === "get") return await store.get(key) as unknown
+
+        if (operation === "set") return await store.set(key, value, ttl as number | undefined)
+
+        if (operation === "getOrSet") return await store.getOrSet(key, value)
+
+        if (operation === "snapshot") return await store.snapshot(key)
+
+        if (operation === "compareAndSet") return await store.compareAndSet(key, value, ttl as StoreSnapshot)
+
+        if (operation === "delete") return await store.delete(key as string | string[])
+
+        if (operation === "has") return await store.has(key)
+
+        if (operation === "clear") return await store.clear()
+
+        throw new Error(`The host does not know the store operation "${String(operation)}"`)
+    }
+
+    // Area metadata reached from a session over the link. Content stays
+    // a byte stream at the storage door; locations remain server-only.
+    @Subscribe("/area")
+    public async area(subject: unknown, area: string, operation: string, args: unknown[]) {
+
+        if (area !== "data" && area !== "cache") throw new Error(`The host does not know the place "${String(area)}"`)
+
+        return this.operate(this.held(subject), area, operation, args)
+    }
+
+    public reachOrRefuse(identity: string) {
+
+        const program = this.reach(identity)
+
+        if (!program) throw new Error("The system does not know this program")
+
+        return program
+    }
+
+    // Client metadata stays in the link as ordinary values and client
+    // content stays a byte stream. A server asks only for `path`, then
+    // performs every operation in its SDK against that root.
+    public operate(program: Program, area: Area, operation: string, args: unknown[]): unknown {
+
+        const place = this.areaOf(program, area)
+
+        const joins = storagePath(args[0])
+
+        const input = args[1]
+
+        if (operation === "path") return place.resolve(joins)
+
+        if (operation === "name") return place.name(joins)
+
+        if (operation === "create") {
+
+            place.create(joins)
+
+            return undefined
+        }
+
+        if (operation === "clear") {
+
+            place.clear(joins)
+
+            return undefined
+        }
+
+        if (operation === "stat-storage" || operation === "stat-file") {
+
+            const found = place.stat(joins)
+
+            if (!found) return null
+
+            if (operation === "stat-storage") {
+
+                if (found.kind !== "directory") throw new Error(`${place.resolve(joins)} is not a Storage directory`)
+
+                return { modifiedAt: found.modifiedAt }
+            }
+
+            if (found.kind !== "file") throw new Error(`${place.resolve(joins)} is not a file`)
+
+            return { size: found.size, modifiedAt: found.modifiedAt }
+        }
+
+        // Sorted, so two runs of the same program see the same order and
+        // a program showing a list does not have to sort it again.
+        if (operation === "list") {
+
+            const options = storageListOptions(input)
+
+            return place.list(joins, [options.recursive, options.depth])
+        }
+
+        // Removing a place is `clear`, and one act with two names is how
+        // a program empties everything meaning to remove one thing.
+        if (operation === "delete-storage" || operation === "delete-file") {
+
+            const found = place.stat(joins)
+
+            if (found && operation === "delete-storage" && found.kind !== "directory") throw new Error(`${place.resolve(joins)} is not a Storage directory`)
+
+            if (found && operation === "delete-file" && found.kind !== "file") throw new Error(`${place.resolve(joins)} is not a file`)
+
+            place.delete(joins)
+
+            return undefined
+        }
+
+        if (operation === "space") return place.space(joins)
+
+        throw new Error(`The host does not know the storage operation "${operation}"`)
+    }
+
+    public streamArea(subject: unknown, area: Area, joins: string[], options: [offset?: number, length?: number] = []) {
+
+        return this.areaOf(this.held(subject), area).stream(joins, options)
+    }
+
+    public async writeArea(subject: unknown, area: Area, joins: string[], content: ReadableStream<Uint8Array> | null, signal?: AbortSignal, overwrite = true) {
+
+        await this.areaOf(this.held(subject), area).write(joins, content, signal, overwrite)
+    }
+
+    public async appendArea(subject: unknown, area: Area, joins: string[], content: ReadableStream<Uint8Array> | null, signal?: AbortSignal) {
+
+        await this.areaOf(this.held(subject), area).append(joins, content, signal)
+    }
+
+    public watchArea(subject: unknown, area: Area, joins: string[], recursive: boolean, signal?: AbortSignal) {
+
+        return this.areaOf(this.held(subject), area).watch(joins, recursive, signal)
+    }
+
+    // ── Installing and uninstalling ──────────────────────────────────
+    //
+    // Installation is the flag on the sole registry record. The files
+    // laid out under its identity are the durable representation of that
+    // state, reconstructed into the same model on boot.
+
+    public installed(program: Program) {
+
+        return this.programs.get(program.identity)?.installed === true
+    }
+
+    // Installation changes every path a process may have remembered, so
+    // validation happens first and every process ends before the live
+    // Program is pointed at its canonical files.
+    @Subscribe("/forget-program")
+    public async forgetNamed(subject: unknown, asker: string | null = null) {
+
+        return await this.forget(this.held(subject), asker)
+    }
+
+    @Subscribe("/command")
+    protected async command(stream: string, operation: string, subject: unknown, value: unknown, asker: string) {
+
+        if (!stream || this.commands.has(stream)) throw new Error("A Program command needs a unique stream")
+
+        const program = this.held(subject)
+        const connection = this.authManager.connectionSignal()
+        let active = true
+        let running: Process | null = null
+        const cancel = () => {
+
+            active = false
+            if (running) this.authManager.linkManager.application.system.exitProcess(running).catch(() => undefined)
+        }
+
+        this.commands.set(stream, cancel)
+        connection.addEventListener("abort", cancel, { once: true })
+
+        try {
+
+            if (operation === "run") {
+
+                let finish!: () => void
+                const completion = new Promise<void>(resolve => { finish = resolve })
+                let sending = Promise.resolve()
+                const emit = (event: unknown) => {
+
+                    if (!active) return
+                    sending = sending.then(async () => { await this.$outbound.publish("/command-output", stream, event) })
+                }
+
+                await this.runProcess(program, value as Launch ?? {}, {
+                    started: process => {
+
+                        running = process
+                        emit({ event: "started", process })
+                    },
+                    output: (output, text) => emit({ event: "output", stream: output === "err" ? "stderr" : "stdout", text }),
+                    exited: (code, signal) => {
+
+                        emit({
+                            event: "exited",
+                            process: running,
+                            exit: { status: signal ? "signaled" : "exited", code, signal }
+                        })
+                        finish()
+                    }
+                }, this.authManager.processManager.processes.get(asker) ?? null)
+
+                await completion
+                await sending
+                return
+            }
+
+            const command = operation === "install"
+                ? this.installStreaming(program, parseProgramInstallOptions(value ?? {}), asker)
+                : operation === "uninstall"
+                    ? this.uninstallStreaming(program, parseProgramUninstallOptions(value ?? {}), asker)
+                    : null
+
+            if (!command) throw new Error(`The Program command API does not know "${operation}"`)
+
+            for await (const chunk of command) {
+
+                if (!active) return
+                await this.$outbound.publish("/command-output", stream, chunk)
+            }
+        }
+        finally {
+
+            connection.removeEventListener("abort", cancel)
+            this.commands.delete(stream)
+        }
+    }
+
+    @Subscribe("/command-cancel")
+    protected cancelCommand(stream: unknown) {
+
+        if (typeof stream === "string") this.commands.get(stream)?.()
+    }
+
+    /** Install while exposing command output with consumer-driven backpressure. */
+    public installStreaming(source: Program, options: ProgramInstallOptions = {}, asker: string | null = null) {
+
+        return this.commandStreaming(output => this.install(source, options, asker, output))
+    }
+
+    /** Uninstall a held Program while exposing cleanup command output. */
+    public uninstallStreaming(program: Program, options: ProgramUninstallOptions = {}, asker: string | null = null) {
+
+        return this.commandStreaming(output => this.uninstall(program, options, asker, output))
+    }
+
+    /** Runs one lifecycle command while preserving output order and backpressure. */
+    private async *commandStreaming<Result>(run: (output: CommandOutput) => Promise<Result>): AsyncGenerator<ProgramCommandChunk, Result, void> {
+
+        const queue: { chunk: ProgramCommandChunk, consumed: () => void }[] = []
+
+        let wake: (() => void) | null = null
+
+        let settled = false
+
+        let result: { value: Result } | undefined
+
+        let failure: unknown
+
+        let detached = false
+
+        const operation = run(chunk => {
+
+            if (detached) return
+
+            return new Promise<void>(consumed => {
+
+                queue.push({ chunk, consumed })
+
+                wake?.()
+
+                wake = null
+            })
+        }).then(value => {
+
+            result = { value }
+        }, error => {
+
+            failure = error
+        }).finally(() => {
+
+            settled = true
+
+            wake?.()
+
+            wake = null
+        })
+
+        try {
+
+            while (!settled || queue.length) {
+
+                const next = queue.shift()
+
+                if (next) {
+
+                    try { yield next.chunk }
+
+                    finally { next.consumed() }
+
+                    continue
+                }
+
+                await new Promise<void>(resolve => { wake = resolve })
+            }
+
+            await operation
+
+            if (failure) throw failure
+
+            return result!.value
+        }
+
+        finally {
+
+            detached = true
+
+            for (const pending of queue.splice(0)) pending.consumed()
+        }
+    }
+
+    public async install(source: Program, options: ProgramInstallOptions = {}, asker: string | null = null, output: InstallOutput = () => undefined) {
+
+        const decision = parseProgramInstallOptions(options)
+
+        return await this.change(source.identity, async () => {
+
+            const home = this.fileManager.join(source.identity)
+
+            const already = existsSync(home)
+
+            // Copied outside the installed files rather than into their place,
+            // so a description that turns out not to be a program has not
+            // taken a working one down on its way to being refused. Kept on
+            // the installed programs area's own filesystem: the final rename is then
+            // local even when the operating-system temp directory is a
+            // separate mount, as it is in Codespaces.
+            const staged = mkdtempSync(join(dirname(this.fileManager.path), `.install-${source.identity}-`))
+
+            const backup = mkdtempSync(join(dirname(this.fileManager.path), `.backup-${source.identity}-`))
+
+            let swapping = false
+
+            let committed = false
+
+            let createdHere = false
+
+            let purgedStorage = false
+
+            try {
+
+                copyProgram(source, staged)
+
+                // Whether what was copied is a program: asked here, while the
+                // old one is still standing, so a description that turns out
+                // to be lying takes nothing down with it. `laidOut` used to
+                // guard this and no longer can — a copied program's
+                // description says nothing about where its parts are,
+                // because they are wherever the system puts them.
+                const stagedProgram = new Program(join(staged, "program.json"))
+                await stagedProgram.validate()
+                const declaredInstallLaunch = this.installLaunch(stagedProgram)
+                const selectedLaunch = decision.launch === undefined ? declaredInstallLaunch : decision.launch
+                const requestedLaunch = selectedLaunch === false || selectedLaunch === undefined
+                    ? undefined
+                    : selectedLaunch === true ? {} : selectedLaunch
+                if (requestedLaunch !== undefined) this.resolveLaunch(stagedProgram, requestedLaunch)
+
+                swapping = true
+
+                mkdirSync(home, { recursive: true })
+
+                for (const what of installedParts) {
+
+                    if (existsSync(join(home, what))) renameSync(join(home, what), join(backup, what))
+                }
+
+                for (const what of readdirSync(staged)) renameSync(join(staged, what), join(home, what))
+
+                const installed = new Program(join(home, "program.json"))
+
+                // Preparation runs against the laid-out files but before
+                // the registry claims the install succeeded.
+                await installed.installServer(output)
+
+                let entry = this.programs.get(source.identity)
+                const previousPermissions = entry?.permissions() ?? null
+
+                // Active callers can consume installation output until activation.
+                if (entry) await this.authManager.processManager.exitAll(source.identity, asker)
+                await this.release(source.identity)
+
+                if (decision.purge && existsSync(installed.storagePath)) {
+                    renameSync(installed.storagePath, join(backup, "storage"))
+                    purgedStorage = true
+                }
+
+                if (entry) {
+
+                    entry.program.replace(installed)
+
+                    entry.installed = true
+
+                    entry.restoreInstalled = false
+
+                    entry.updatePermissions(this.resolvePermissions(entry.program))
+                }
+
+                else {
+
+                    entry = await this.register(installed, { installed: true, transitionOwnsIdentity: true })
+
+                    createdHere = true
+                }
+
+                committed = true
+
+                if (createdHere) await this.created(entry)
+
+                await this.authManager.processManager.announceHost("program", entry.identity, "install", entry.identity, entry)
+
+                // Installation is shared registry state, so it is announced
+                // independently of the response returned to its caller.
+                await this.$outbound.publish("/install", entry.record())
+
+                if (previousPermissions && !isDeepStrictEqual(previousPermissions, entry.permissions())) {
+                    await this.announcePermissions(entry)
+                }
+
+                // A reinstall ended every Process of the Program, its startup one too. That one
+                // starts again as it would with the System, so what starts with the System keeps running.
+                if (!createdHere) {
+
+                    try {
+
+                        const startup = await this.startup(entry.program, "get")
+
+                        if (startup) await this.start(entry.program, startup, undefined, null, true)
+                    }
+
+                    catch (exception) { console.log(`programs: ${entry.identity} did not start — ${exception instanceof Error ? exception.message : "invalid startup settings"}`) }
+                }
+
+                if (requestedLaunch !== undefined) {
+                    await this.start(entry.program, requestedLaunch, undefined, null, true)
+                }
+
+                return entry
+            }
+
+            catch (exception) {
+
+                // Restore the prior files, definition settings, and any storage
+                // set aside for purge after a failure before commit.
+                if (swapping && !committed) {
+
+                    for (const what of installedParts) rmSync(join(home, what), { recursive: true, force: true })
+
+                    if (purgedStorage) rmSync(join(home, "storage"), { recursive: true, force: true })
+
+                    for (const what of readdirSync(backup)) renameSync(join(backup, what), join(home, what))
+
+                    if (!already && !readdirSync(home).length) rmSync(home, { recursive: true, force: true })
+                }
+
+                throw exception
+            }
+
+            finally {
+
+                rmSync(staged, { recursive: true, force: true })
+
+                rmSync(backup, { recursive: true, force: true })
+            }
+        })
+    }
+
+    // Purge also ends Processes and removes storage and the runtime entry.
+    public async uninstall(program: Program, options: ProgramUninstallOptions = {}, asker: string | null = null, output: CommandOutput = () => undefined) {
+
+        const { purge = false } = parseProgramUninstallOptions(options)
+
+        return await this.change(program.identity, async () => {
+
+            const entry = this.find(program.identity)
+
+            if (!entry.installed) {
+
+                if (!purge) return entry.identity
+
+                await this.authManager.processManager.exitAll(entry.identity, asker)
+
+                await this.release(entry.identity)
+
+                rmSync(this.fileManager.join(entry.identity), { recursive: true, force: true })
+
+                return await this.forgetEntry(entry)
+            }
+
+            return await this.uninstallEntry(entry, purge, asker, output)
+        })
+    }
+
+    private async uninstallEntry(entry: Entry, purge: boolean, asker: string | null, output: CommandOutput) {
+
+        if (purge) {
+
+            await this.authManager.processManager.exitAll(entry.identity, asker)
+
+            await this.release(entry.identity)
+        }
+
+        await entry.program.uninstallServer(output)
+
+        const home = this.fileManager.join(entry.identity)
+
+        if (purge) rmSync(home, { recursive: true, force: true })
+
+        else {
+
+            for (const what of installedParts) rmSync(join(home, what), { recursive: true, force: true })
+
+            if (!readdirSync(home).length) rmSync(home, { recursive: true, force: true })
+        }
+
+        entry.installed = false
+
+        await this.authManager.processManager.announceHost("program", entry.identity, "uninstall", entry.identity, entry, purge)
+
+        await this.authManager.processManager.announceSubject("program", entry.identity, "uninstall", entry.program.reference, purge)
+
+        await this.$outbound.publish("/uninstall", entry.record(), purge)
+
+        if (purge) await this.forgetEntry(entry)
+
+        return entry.identity
+    }
+
+    public async forget(program: Program, asker: string | null = null) {
+
+        return await this.change(program.identity, async () => {
+
+            const entry = this.find(program.identity)
+
+            await this.authManager.processManager.exitAll(program.identity, asker)
+
+            return await this.forgetEntry(entry)
+        })
+    }
+
+    private async forgetEntry(entry: Entry, restore = true) {
+
+        if (this.programs.get(entry.identity) !== entry) throw new Error("The system no longer knows this program")
+
+        await this.release(entry.identity)
+
+        this.programs.delete(entry.identity)
+
+        await this.authManager.processManager.announceHost("program", entry.identity, "forget", entry.identity, entry)
+
+        await this.authManager.processManager.announceSubject("program", entry.identity, "forget", entry.program.reference)
+
+        await this.$outbound.publish("/forget", entry.identity)
+
+        if (restore && entry.restoreInstalled) {
+
+            const declaration = this.fileManager.join(entry.identity, "program.json")
+
+            if (existsSync(declaration)) {
+
+                const installed = await this.register(new Program(declaration), { installed: true, transitionOwnsIdentity: true })
+
+                await this.created(installed)
+            }
+        }
+
+        return entry.identity
+    }
+
+    private async release(identity: string) {
+
+        const store = this.opened.get(identity)
+
+        this.opened.delete(identity)
+
+        await store?.disconnect()
+
+        this.said.get(identity)?.close()
+
+        this.said.delete(identity)
+
+        this.kept.get(identity)?.close()
+
+        this.kept.delete(identity)
+    }
+
+    @Subscribe("/create-process")
+    public async createProcess(subject: unknown, launch: Launch = {}, parent: Process | string | null = null) {
+
+        const program = this.held(subject)
+
+        return await this.serializeCreation(program.identity, async () => {
+
+            // Every runtime program, installed or not, is reached through the
+            // same registry. A created process therefore starts from the exact
+            // Program its caller addressed, never from an installed-only view.
+            if (this.reach(program.identity) !== program) throw new Error("The Program represented by this handle does not exist")
+
+            const creator = typeof parent === "string" ? this.authManager.processManager.processes.get(parent) : parent
+
+            if (typeof parent === "string" && !creator) throw new Error("The system does not know the parent process")
+
+            return await this.start(program, launch, undefined, creator ?? null)
+        })
+    }
+
+    /** Create one Process whose output and ending are observed before startup. */
+    public async runProcess(program: Program, launch: Launch = {}, watching?: Watching, parent: Process | null = null) {
+
+        return await this.serializeCreation(program.identity, async () => {
+
+            if (this.reach(program.identity) !== program) throw new Error("The Program represented by this handle does not exist")
+
+            return await this.start(program, launch, watching, parent)
+        })
+    }
+
+    @Subscribe("/find-or-create-process")
+    public async findOrCreateProcess(subject: unknown, launch: Launch & { name: string }, parent: Process | string | null = null) {
+
+        const held = this.held(subject)
+
+        return await this.serializeCreation(held.identity, async () => {
+
+            const program = this.reach(held.identity)
+
+            if (program !== held) throw new Error("The Program represented by this handle does not exist")
+
+            launch = this.launchOf(program, launch) as Launch & { name: string }
+
+            const resolved = this.resolveLaunch(program, launch)
+
+            if (typeof launch.name !== "string" || !launch.name) throw new Error("findOrCreate requires a non-empty process name")
+
+            const existing = [...this.authManager.processManager.processes.values()].find(process => process.program === program && process.name === launch.name)
+
+            // Finding is the request; the launch belongs to creating, the fallback, so a Process found
+            // by its name is returned however it was launched. A launch that must win replaces it.
+            if (existing && !launch.replace) return existing.identity
+
+            const creator = typeof parent === "string" ? this.authManager.processManager.processes.get(parent) : parent
+
+            if (typeof parent === "string" && !creator) throw new Error("The system does not know the parent process")
+
+            return await this.start(program, launch, undefined, creator ?? null, false, resolved)
+        })
+    }
+
+    /** A launch with what the Program's definition says every launch takes unless it says otherwise. */
+    private launchOf(program: Program, value: unknown): Launch {
+
+        return withProcessDefaults(parseLaunch(value), program.config.process)
+    }
+
+    // One interpretation of a Process launch, used both when it is created now
+    // and when a future startup launch is persisted. Runtime-only facts such as
+    // name occupancy and capacity remain in `start`.
+    private resolveLaunch(program: Program, value: unknown) {
+
+        const launch = this.launchOf(program, value)
+
+        const options = Object.fromEntries(Object.entries(launch.options ?? {}).sort(([left], [right]) => left.localeCompare(right)))
+
+        const askedServer = typeof launch.server === "object" ? launch.server : {}
+        const askedClient = typeof launch.client === "object" ? launch.client : {}
+
+        if ((launch.server === true || typeof launch.server === "object") && !program.server) throw new Error("This program declared no server half — a launch cannot add one")
+
+        if ((launch.client === true || typeof launch.client === "object") && !program.client) throw new Error("This program declared no client half — a launch cannot add one")
+
+        const serverSelected = typeof launch.server === "object" || (launch.server ?? program.server?.start ?? false)
+
+        const server = program.server && serverSelected ? program.server : null
+
+        const clientSelected = typeof launch.client === "object" || (launch.client ?? program.client?.start ?? false)
+
+        const client = program.client && clientSelected ? program.client : null
+
+        if (!server && !client) throw new Error("A process must have a server half, a client half, or both")
+
+        // Resolving the Window here validates the same launch grammar even when
+        // the launch is being stored for a later boot. Only the original launch
+        // is persisted; system defaults are derived again when it actually runs.
+        const windowShape = program.client ? this.clientShape(program, askedClient) : null
+
+        const shape = client ? windowShape : null
+
+        const intent: ProcessLaunch = {
+
+            server: server ? { service: askedServer.service ?? server.service ?? false } : null,
+
+            client: shape ? {
+
+                ...shape,
+
+                service: askedClient.service ?? client?.service ?? false,
+
+                position: askedClient.position ?? program.client?.position ?? null,
+
+                size: askedClient.size ?? program.client?.size ?? null
+            } : null,
+
+            options
+        }
+
+        return { options, server, client, shape, windowShape, intent }
+    }
+
+    private async start(program: Program, launch: Launch = {}, watching?: Watching, parent: Process | null = null, transitionOwnsIdentity = false, prepared?: ReturnType<ProgramManager["resolveLaunch"]>, opened: OpenTarget | null = null) {
+
+        if (!transitionOwnsIdentity && this.changing.has(program.identity)) throw new Error("This program is changing and cannot create a process")
+
+        // A retained Program survives uninstall(), but its declared
+        // files do not. Refuse before a process identity or window is
+        // allocated, so a failed launch never briefly exists.
+        await program.validate()
+
+        // Every launch takes the Program's Process defaults first: its name, replacement, and options.
+        launch = this.launchOf(program, launch)
+
+        const resolved = prepared ?? this.resolveLaunch(program, launch)
+
+        const { options, server, client } = resolved
+
+        const shape = client ? resolved.shape : null
+
+        // Program-local creation is serialized. Release a requested name before
+        // allocating its replacement, while retaining ownership of that queue.
+        if (launch.name !== undefined) {
+            const existing = [...this.authManager.processManager.processes.values()].find(process => process.program === program && process.name === launch.name)
+            if (existing) {
+                if (!launch.replace) throw new Error("This program already has a process with that name")
+                await this.authManager.processManager.exit(existing.identity)
+            }
+        }
+
+        // Capacity belongs to the Program being executed, not to whichever
+        // Process requested the launch. This is the final gate before identity
+        // allocation and registration. The Program-local queue prevents another
+        // launch from passing before this one enters the authoritative map.
+        let active = 0
+
+        for (const process of this.authManager.processManager.processes.values()) {
+
+            if (process.program !== program) continue
+
+            active++
+
+            if (active >= maximumProcessesPerProgram) throw new Error(`This program has reached its limit of ${maximumProcessesPerProgram} active processes`)
+        }
+
+        let identity = shortIdentity()
+
+        while (this.authManager.processManager.processes.has(identity)) identity = shortIdentity()
+
+        // Kept in this Program's declared storage, whoever is or is not
+        // watching and whether the Program is installed or attached. Each
+        // server incarnation attaches to the same Process-level listeners.
+        const logs = this.logsOf(program)
+
+        const runtime = server ? (owner: Program) => this.serverRuntime(owner) : null
+
+        // Lifecycle consumers are attached before either initial endpoint is
+        // activated, so even a server command that exits immediately has a
+        // complete output and exit record.
+        await this.authManager.processManager.register(identity, launch.name ?? null, program, options, resolved.intent, runtime, client !== null, shape, parent, {
+            window: resolved.windowShape,
+            prepare: record => {
+                // Known before either Endpoint runs, so its first read already has it.
+                record.opened = opened
+                record.onServerStart(server => server.onOutput((stream, text) => logs.printed(identity, stream === "err" ? "stderr" : "stdout", text)))
+                record.onServerStop((code, signal) => logs.endpointExited(identity, "server", code, signal))
+                record.onClientStop(() => logs.endpointExited(identity, "client", null, null))
+
+                if (watching) {
+                    record.onServerStart(server => server.onOutput(watching.output))
+                    record.onExit(watching.exited)
+                }
+            },
+            created: record => watching?.started?.(record)
+        })
+
+        return identity
+    }
+
+    /** Starts one Process of a Program with its default launch, to open one target. */
+    public async open(program: Program, target: OpenTarget) {
+
+        return await this.start(program, {}, undefined, null, false, undefined, target)
+    }
+
+    /** Creates one fresh execution runtime for a Server endpoint. */
+    public serverRuntime(program: Program) {
+
+        const server = program.server
+
+        if (!server) throw new Error("This program declared no server half")
+
+        return this.authManager.linkManager.application.createServerRuntime(program)
+    }
+
+    /** Resolves and validates one client endpoint incarnation. */
+    public clientShape(program: Program, asked: ClientLaunch = {}): StandardShape {
+
+        const client = program.client
+
+        if (!client) throw new Error("This program declared no client half")
+
+        if (typeof asked !== "object" || asked === null || Array.isArray(asked)) throw new Error("A client launch must be a named shape")
+
+        if (asked.service !== undefined && typeof asked.service !== "boolean") throw new Error("A launch client's service role must be true or false")
+
+        if (asked.title !== undefined && typeof asked.title !== "string") throw new Error("A launch client's title must be text")
+
+        if (asked.header !== undefined && typeof asked.header !== "boolean") throw new Error("A launch client's header state must be true or false")
+
+        for (const [what, value] of [["size", asked.size], ["position", asked.position]] as const) {
+
+            if (value === undefined) continue
+
+            if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`A launch client's ${what} must name both of its values`)
+
+            const pair = what === "size" ? [value.width, value.height] : [value.x, value.y]
+
+            if (!pair.every(isValue)) throw new Error(`A launch client's ${what} is a finite pixel number or a relative expression such as "50% + 10"`)
+        }
+
+        if (asked.layer !== undefined && !layers.includes(asked.layer)) throw new Error(`A launch client's layer is one of ${layers.join(", ")}`)
+
+        if (asked.minimize !== undefined && typeof asked.minimize !== "boolean") throw new Error("A launch client's minimize state must be true or false")
+
+        if (asked.maximize !== undefined && typeof asked.maximize !== "boolean") throw new Error("A launch client's maximize state must be true or false")
+
+        const layer = asked.layer ?? client.layer ?? "window"
+
+        // What neither the launch nor the Program says, the System fills the same way in every layer,
+        // knowing nothing of any screen: a square of fixed pixels, centered on the plane's zero.
+        const size = asked.size ?? client.size ?? defaultWindowSize
+
+        return {
+
+            title: asked.title ?? client.title ?? program.title,
+
+            header: asked.header ?? client.header ?? true,
+
+            position: asked.position ?? client.position ?? centered(size),
+
+            size,
+
+            layer,
+
+            minimize: asked.minimize ?? client.minimize ?? false,
+
+            maximize: asked.maximize ?? client.maximize ?? false
+        }
+    }
+
+    public toJSON() {
+
+        return {
+
+            programs: [...this.programs].map(([identity, entry]) => [identity, entry.record()] as [string, ProgramRecord])
+        }
+    }
+}
+
+export type ProgramManagerSnapshot = ReturnType<ProgramManager["toJSON"]>
+
+/** The size of a Window whose launch and Program name none. */
+const defaultWindowSize = Object.freeze({ width: 500, height: 500 })
+
+/** The position that puts a Window of this size with its center on the plane's zero. */
+function centered(size: Size): Position {
+
+    return { x: half(size.width), y: half(size.height) }
+}
+
+/** Minus half of a value, pixels and share alike: `500` gives `-250`, `"1/2"` gives `"-25%"`. */
+function half(value: Value): Value {
+
+    const parsed = parseRelativeValue(value)
+
+    if (!parsed) return 0
+
+    // Adding zero turns a halved zero's sign away: -0 is still no distance.
+    const share = -parsed.relative / 2 + 0
+
+    const pixels = -parsed.pixels / 2 + 0
+
+    if (share === 0) return pixels
+
+    if (pixels === 0) return `${share * 100}%`
+
+    return `${share * 100}% ${pixels < 0 ? "-" : "+"} ${Math.abs(pixels)}`
+}
+
+// What a launcher may say at the start. Named rather than ordered,
+// because an order is invisible where it is written — and text, because
+// an option must mean one thing however the process was started, and
+// the command line can only hand over text.
+export type Options = Record<string, string>
+
+// The two places a program keeps things. One survives an update and one
+// may be emptied at any moment; both are the program's, shared by every
+// process of it.
+export type Area = "data" | "cache"
+
+function storagePath(value: unknown) {
+
+    if (value === undefined) return []
+
+    if (!Array.isArray(value) || value.some(part => typeof part !== "string")) throw new Error("A Storage path is a list of names")
+
+    return value as string[]
+}
+
+function storageListOptions(value: unknown) {
+
+    if (value === undefined) return { recursive: false, depth: undefined }
+
+    if (!value || typeof value !== "object") throw new Error("Storage list options must be an object")
+
+    const options = value as { recursive?: unknown, depth?: unknown }
+
+    if (options.recursive !== undefined && typeof options.recursive !== "boolean") throw new Error("Storage recursive must be boolean")
+
+    if (options.depth !== undefined && (!Number.isSafeInteger(options.depth) || (options.depth as number) < 0)) throw new Error("Storage depth must be a non-negative safe integer")
+
+    if (options.depth !== undefined && options.recursive !== true) throw new Error("A Storage list depth requires recursive listing")
+
+    return { recursive: options.recursive === true, depth: options.depth as number | undefined }
+}
+
+// Someone listening to a process from outside it. Given at launch
+// because that is when the child's pipes are decided, and they cannot be
+// decided twice.
+export interface Watching {
+
+    started?: (process: Process) => void
+
+    output: (stream: Stream, text: string) => void
+
+    exited: (code: number | null, signal: NodeJS.Signals | null) => void
+}
+
+// What a program is, copied to where it is going: the halves it
+// declares, its icon, and the description itself — rewritten so the
+// copy names its parts where they now are rather than where they were.
+//
+// Never `storage`: what a program kept belongs to the place it is kept
+// in, and a copy that carried it would be two programs sharing one
+// memory.
+export function copyProgram(program: Program, into: string) {
+
+    const config: Record<string, unknown> = { ...program.config }
+
+    for (const [what, from] of [["server", program.serverPath], ["client", program.clientPath]] as const) {
+
+        // A client half that is a URL has no directory to copy and is
+        // not carried: an installed program's client is its own files.
+        if (what === "client" && program.clientUrl) throw new Error("A program installed here keeps its client at ./client, and a URL is somewhere else entirely")
+
+        if (!from || !existsSync(from)) continue
+
+        cpSync(from, join(into, what), { recursive: true })
+
+        config[what] = { ...config[what] as object, location: what }
+    }
+
+    if (program.iconPath) {
+
+        copyFileSync(program.iconPath, join(into, "icon.png"))
+
+        config.icon = "icon.png"
+    }
+
+    else delete config.icon
+
+    const agent = program.agent()
+
+    if (agent !== null) {
+
+        writeFileSync(join(into, "agent.md"), agent)
+
+        config.agent = "agent.md"
+    }
+
+    else delete config.agent
+
+    // The description names the places the system chose. Presence is
+    // part of a half's declaration, so its location is never omitted.
+    delete config.storage
+
+    writeFileSync(join(into, "program.json"), JSON.stringify(strip(config), null, 4))
+}
+
+const installedParts = ["server", "client", "icon.png", "agent.md", "program.json"] as const
+
+// JSON has no `undefined`, and a key whose value is one would be written
+// as nothing at all — so they are removed rather than left to vanish.
+function strip(value: unknown): unknown {
+
+    if (Array.isArray(value)) return value.map(strip)
+
+    if (typeof value !== "object" || value === null) return value
+
+    return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined).map(([key, entry]) => [key, strip(entry)]))
+}
+
+// An installed program is one the system laid out, so its places are the
+// ones the system lays out. Saying them is allowed — a program.json
+// written by hand may well spell out what it could have left unsaid —
+// but saying anything else is not, because then the system could no
+// longer find any installed program without reading its config first.

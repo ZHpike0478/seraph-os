@@ -1,0 +1,311 @@
+import {
+    programPermissionCatalog,
+    networkScopeCovers,
+    parsePermission,
+    parsePermissionName,
+    type Permission,
+    type PermissionName,
+    type PermissionValue,
+    type PermissionValueDomain,
+    type Permissions,
+    type StoragePermissionOperation
+} from "@phreshos/core"
+import { nativeStorageScopeAccesses, nativeStorageScopeCovers } from "./storage-permission"
+
+/** Validation and derivation over the one permission domain defined by Core. */
+export class PermissionCatalog {
+
+    private readonly definitions: PermissionDefinitions
+
+    public constructor(rules: PermissionRules) {
+
+        const validated: Partial<Record<PermissionName, StoredDefinition>> = {}
+
+        for (const name of Object.keys(programPermissionCatalog) as PermissionName[]) {
+            const rule = rules[name]
+
+            if (!rule || typeof rule !== "object") throw new Error(`Permission "${name}" needs a definition`)
+            let defaults: PermissionValue<typeof name>[]
+
+            try {
+
+                const parsed = parsePermission(name, rule.default)
+
+                if (!Array.isArray(parsed)) throw new Error()
+
+                defaults = parsed
+            }
+
+            catch {
+
+                throw new Error(`Permission "${name}" has an invalid default`)
+            }
+
+            validated[name] = Object.freeze({
+                valueDomain: programPermissionCatalog[name],
+                default: Object.freeze(defaults)
+            })
+
+        }
+
+        for (const name of Object.keys(programPermissionCatalog) as PermissionName[]) {
+
+            if (!validated[name]) throw new Error(`Permission "${name}" needs a definition`)
+        }
+
+        this.definitions = Object.freeze(validated) as PermissionDefinitions
+    }
+
+    public definition<Name extends PermissionName>(name: Name): PermissionDefinition<Name> {
+
+        const definition = this.definitions[name]
+
+        if (!definition) throw new Error(`The System does not know the permission "${String(name)}"`)
+
+        return definition
+    }
+
+    public resolve<Name extends PermissionName>(name: Name, value: unknown): Permission<Name> {
+
+        const definition = this.definition(name)
+
+        if (value === true) return [...definition.default]
+        if (value === false || value === null) return value
+
+        const requested = unique(strings(value, `Permission "${name}"`))
+
+        try {
+
+            const parsed = parsePermission(name, requested)
+
+            if (Array.isArray(parsed)) return parsed
+        }
+
+        catch { }
+
+        throw new Error(`Permission "${name}" contains an unknown value`)
+    }
+
+    public declarations(value: unknown): DeclaredPermissions {
+
+        if (value === undefined) return Object.freeze({})
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("A Program's permissions must be a record")
+
+        const resolved: Partial<Record<PermissionName, readonly string[]>> = {}
+
+        for (const [unknownName, assignment] of Object.entries(value)) {
+
+            if (!Object.hasOwn(programPermissionCatalog, unknownName)) continue
+            const name = parsePermissionName(unknownName)
+            const permission = this.resolve(name, assignment)
+
+            if (!Array.isArray(permission)) throw new Error("A Program-declared permission must be true or a list of values")
+
+            resolved[name] = Object.freeze(permission)
+        }
+
+        return Object.freeze(resolved) as DeclaredPermissions
+    }
+
+    public stored(value: unknown): Permissions {
+
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("The Program permissions file is invalid")
+
+        const permissions: Partial<Record<PermissionName, Permission>> = {}
+
+        for (const [unknownName, assignment] of Object.entries(value)) {
+
+            if (!Object.hasOwn(programPermissionCatalog, unknownName)) continue
+            const name = parsePermissionName(unknownName)
+
+            if (assignment === true) throw new Error("The Program permissions state contains unresolved shorthand")
+
+            const permission = this.resolve(name, assignment)
+            if (permission === null) throw new Error("The Program permissions state cannot contain an absent assignment")
+            permissions[name] = permission
+        }
+
+        return permissions as Permissions
+    }
+
+    public grants<Name extends PermissionName>(name: Name, grant: PermissionGrant, requested: readonly PermissionValue<Name>[]) {
+
+        if (!Array.isArray(grant)) return false
+
+        const domain = this.definition(name).valueDomain
+
+        if (valued(domain)) {
+
+            return grant.length === 0 || (requested.length > 0 && requested.every(value => {
+
+                return grant.some(granted => valueCovers(domain, granted, value))
+            }))
+        }
+
+        return requested.length === 0
+    }
+
+    /** Whether one value-less or valued permission is present at all. */
+    public granted(permission: PermissionGrant) {
+
+        return Array.isArray(permission)
+    }
+
+    /** Tests one request against the authoritative permission state. */
+    public allows<Name extends PermissionName>(
+        name: Name,
+        requested: readonly PermissionValue<Name>[],
+        permissions: Permissions
+    ) {
+
+        this.definition(name)
+
+        if (name === "desktopConnection") {
+
+            if (this.allows("authentication", [], permissions)) return true
+        }
+
+        const assigned = permissions[name]
+
+        // An exact assignment is the owner's final decision for that
+        // permission. Broader fallback grants must never undo a restriction.
+        if (assigned !== undefined && assigned !== null) return this.grants(name, assigned, requested)
+
+        if (name !== "all" && this.granted(permissions.all ?? null)) return true
+
+        return false
+    }
+
+    /** Tests one native Storage path against the complete effective authority. */
+    public allowsStorage(
+        all: PermissionGrant,
+        storage: PermissionGrant,
+        path: string,
+        operation?: StoragePermissionOperation
+    ) {
+
+        // Storage uses path-aware containment, but assignment priority remains
+        // identical to every other permission: an exact value is final and
+        // `all` is only a fallback when Storage is unassigned.
+        if (storage !== null) {
+
+            if (!Array.isArray(storage)) return false
+            if (storage.length === 0) return true
+
+            return storage.some(scope => nativeStorageScopeAccesses(scope, path, operation))
+        }
+
+        return this.granted(all)
+    }
+
+    public changed<Name extends PermissionName>(left: Permission<Name>, right: Permission<Name>) {
+
+        if (!Array.isArray(left) || !Array.isArray(right)) return left !== right
+
+        return left.length !== right.length || left.some(value => !right.includes(value))
+    }
+
+}
+
+type PermissionGrant = readonly string[] | false | null
+
+type PermissionDefinition<Name extends PermissionName = PermissionName> = Readonly<{
+    valueDomain: PermissionValueDomain<Name>
+    default: readonly PermissionValue<Name>[]
+}>
+
+type PermissionDefinitions = Readonly<{
+    [Name in PermissionName]: PermissionDefinition<Name>
+}>
+
+export type DeclaredPermissions = Readonly<{
+    [Name in PermissionName]?: readonly PermissionValue<Name>[]
+}>
+
+type PermissionRule<Name extends PermissionName> = Omit<PermissionDefinition<Name>, "valueDomain">
+
+type PermissionRules = Readonly<{
+    [Name in PermissionName]: PermissionRule<Name>
+}>
+
+type StoredDefinition = Readonly<{
+    valueDomain: PermissionValueDomain
+    default: readonly string[]
+}>
+
+function strings(value: unknown, subject: string): string[] {
+
+    if (!Array.isArray(value) || value.some(entry => typeof entry !== "string")) throw new Error(`${subject} must be a list of strings`)
+
+    return value
+}
+
+function unique(values: readonly string[]) {
+
+    return [...new Set(values)]
+}
+
+function valued(domain: PermissionValueDomain) {
+
+    if (domain === "program" || domain === "service" || domain === "layer" || domain === "network" || domain === "storage") return true
+    if (domain === "none") return false
+
+    domain satisfies never
+
+    throw new Error("The System does not know this permission value domain")
+}
+
+function valueCovers(domain: PermissionValueDomain, grant: string, requested: string) {
+
+    if (domain === "program" || domain === "service" || domain === "layer") return grant === requested
+    if (domain === "network") return networkScopeCovers(grant, requested)
+    if (domain === "storage") return nativeStorageScopeCovers(grant, requested)
+    if (domain === "none") return false
+
+    domain satisfies never
+
+    return false
+}
+
+/** Authoritative defaults for every Core-defined permission. */
+export const permissionCatalog = new PermissionCatalog({
+    all: {
+        default: []
+    },
+    services: {
+        default: []
+    },
+    programs: {
+        default: []
+    },
+    layers: {
+        default: []
+    },
+    network: {
+        default: []
+    },
+    storage: {
+        default: []
+    },
+    uploads: {
+        default: []
+    },
+    logs: {
+        default: []
+    },
+    appearance: {
+        default: []
+    },
+    desktopPreferences: {
+        default: []
+    },
+    desktopViewport: {
+        default: []
+    },
+    desktopConnection: {
+        default: []
+    },
+    authentication: {
+        default: []
+    }
+})

@@ -1,0 +1,311 @@
+import { type default as AuthManager } from "@client/core/link-manager/auth-manager/auth-manager"
+import { type ProgramRecord } from "@server/core/link-manager/auth-manager/program-manager/entry"
+import type Program from "@client/core/link-manager/auth-manager/program-manager/program"
+import { ReactTunnel } from "@the-link/react"
+import { useCallback } from "react"
+import ClientProcessBoundary from "./client-process-boundary"
+import ClientTraffic from "./client-traffic"
+import { sdkProcess, sdkProgram } from "./sdk-records"
+import SystemAccess from "./system-access"
+import { isServiceAddress } from "@phreshos/core"
+
+/** Projects authoritative System announcements into every Client frame. */
+export default function useAnnouncements(authManager: AuthManager, panes: Map<string, ClientProcessBoundary>, traffic: ClientTraffic) {
+
+    const processes = ReactTunnel.useFactory(authManager.processManager.$inbound)
+    const programs = ReactTunnel.useFactory(authManager.programManager.$inbound)
+    const authentication = ReactTunnel.useFactory(authManager.$inbound)
+    const permissions = ReactTunnel.useFactory(authManager.permissionManager.$inbound)
+    const opening = ReactTunnel.useFactory(authManager.openingManager.$inbound)
+
+    const logs = ReactTunnel.useFactory(authManager.$inbound)
+
+    const post = useCallback(function (program: string, route: string, ...message: unknown[]) {
+
+        for (const pane of panes.keys()) {
+
+            const access = new SystemAccess(authManager, pane)
+
+            access.canProgram({ identity: program }).then(granted => {
+
+                if (granted) return traffic.emit(pane, route, ...message)
+            }).catch(() => undefined)
+        }
+
+    }, [authManager, panes, traffic])
+
+    const postVisible = useCallback(function (visible: (access: SystemAccess) => Promise<boolean>, route: string, ...message: unknown[]) {
+
+        for (const pane of panes.keys()) {
+
+            const access = new SystemAccess(authManager, pane)
+
+            visible(access).then(granted => {
+
+                if (granted) return traffic.emit(pane, route, ...message)
+            }).catch(() => undefined)
+        }
+
+    }, [authManager, panes, traffic])
+
+    const postConnection = useCallback(function (identity: string, route: string, ...message: unknown[]) {
+
+        postVisible(access => access.canConnection(identity), route, ...message)
+
+    }, [postVisible])
+
+    const postSession = useCallback(function (identity: string, route: string, ...message: unknown[]) {
+
+        postVisible(access => access.canSession(identity), route, ...message)
+
+    }, [postVisible])
+
+    authentication.useSubscribe("/connection/create", useCallback((value: unknown) => {
+
+        const identity = domainIdentity(value)
+        if (identity) postConnection(identity, "host-connection", "create", identity, value)
+    }, [postConnection]))
+    authentication.useSubscribe("/connection/disconnect", useCallback((value: unknown) => {
+
+        const identity = domainIdentity(value)
+        if (identity) postConnection(identity, "host-connection", "disconnect", identity, value)
+    }, [postConnection]))
+    authentication.useSubscribe("/connection/session-change", useCallback((value: unknown, session: unknown) => {
+
+        const identity = domainIdentity(value)
+        if (identity) postConnection(identity, "connection-host", "sessionChange", identity, session)
+    }, [postConnection]))
+    authentication.useSubscribe("/session/create", useCallback((value: unknown) => {
+
+        const identity = domainIdentity(value)
+        if (identity) postSession(identity, "host-session", "create", identity, value)
+    }, [postSession]))
+    authentication.useSubscribe("/session/connection-attach", useCallback((value: unknown, connection: unknown) => {
+
+        const session = domainIdentity(value)
+        const attached = domainIdentity(connection)
+        if (session && attached) postVisible(
+            async access => await access.canSession(session) && await access.canConnection(attached),
+            "session-host",
+            "connectionAttach",
+            session,
+            connection
+        )
+    }, [postVisible]))
+    authentication.useSubscribe("/session/connection-detach", useCallback((value: unknown, connection: unknown) => {
+
+        const session = domainIdentity(value)
+        const detached = domainIdentity(connection)
+        if (session && detached) postConnection(detached, "session-host", "connectionDetach", session, connection)
+    }, [postConnection]))
+    authentication.useSubscribe("/session/end", useCallback((value: unknown, reason: unknown, previousConnections: unknown) => {
+
+        const identity = domainIdentity(value)
+        if (!identity) return
+
+        const connections = Array.isArray(previousConnections)
+            ? previousConnections.map(domainIdentity).filter((entry): entry is string => entry !== null)
+            : []
+
+        const visible = async (access: SystemAccess) => await access.canSession(identity)
+            || await any(connections, connection => access.canConnection(connection))
+
+        postVisible(visible, "session-host", "end", identity, reason)
+        postVisible(visible, "host-session", "end", identity, value, reason)
+    }, [postVisible]))
+
+    processes.useSubscribe("/created", useCallback((payload: HostedProcessRecord | null) => {
+
+        if (!payload) return
+
+        const record = processRecord(authManager, payload)
+
+        post(payload.program, "host-process", "create", payload.program, record)
+        post(payload.program, "program-host", "processCreate", program(authManager, payload.program).reference, record)
+
+    }, [authManager, post]))
+
+    processes.useSubscribe("/exited", useCallback((payload: HostedProcessRecord | null, code: number | null, signal: string | null) => {
+
+        if (!payload) return
+
+        const record = processRecord(authManager, payload)
+
+        post(payload.program, "host-process", "exit", payload.program, record, code, signal)
+        post(payload.program, "program-host", "processExit", program(authManager, payload.program).reference, record, code, signal)
+        post(payload.program, "process-host", "exit", payload.reference, code, signal)
+
+    }, [authManager, post]))
+
+    const endpoint = useCallback((event: "endpointStart" | "endpointStop", endpoint: "server" | "client", payload: HostedProcessRecord | null) => {
+
+        if (!payload) return
+
+        post(payload.program, "process-host", event, payload.reference, processRecord(authManager, payload), endpoint)
+
+    }, [authManager, post])
+
+    processes.useSubscribe("/server-start", useCallback((_identity: unknown, payload: HostedProcessRecord | null) => endpoint("endpointStart", "server", payload), [endpoint]))
+    processes.useSubscribe("/server-stop", useCallback((_identity: unknown, payload: HostedProcessRecord | null) => endpoint("endpointStop", "server", payload), [endpoint]))
+    processes.useSubscribe("/client-start", useCallback((_identity: unknown, payload: HostedProcessRecord | null) => endpoint("endpointStart", "client", payload), [endpoint]))
+    processes.useSubscribe("/client-stop", useCallback((_identity: unknown, payload: HostedProcessRecord | null) => endpoint("endpointStop", "client", payload), [endpoint]))
+
+    const serviceEvent = useCallback((event: "available" | "unavailable", value: unknown) => {
+
+        if (!isServiceAddress(value)) return
+
+        postVisible(access => access.canService(value), "host-service", event, value.process, value)
+    }, [postVisible])
+
+    processes.useSubscribe("/service-available", useCallback((value: unknown) => serviceEvent("available", value), [serviceEvent]))
+    processes.useSubscribe("/service-unavailable", useCallback((value: unknown) => serviceEvent("unavailable", value), [serviceEvent]))
+
+    processes.useSubscribe("/said", useCallback((identity: string, event: string, value: unknown) => {
+
+        const target = authManager.processManager.processes.get(identity)
+
+        if (target) post(target.program, "host-end", event, target.reference, value)
+
+    }, [authManager, post]))
+
+    const programEvent = useCallback((event: "create" | "install" | "uninstall" | "forget", entry: ProgramRecord | null, purge?: boolean) => {
+
+        if (!entry) return
+
+        const record = sdkProgram(entry)
+
+        post(entry.identity, "host-program", event, entry.identity, record, purge === true)
+
+        if (event === "uninstall") post(entry.identity, "program-host", event, entry.reference, purge === true)
+        if (event === "forget") post(entry.identity, "program-host", event, entry.reference)
+
+    }, [post])
+
+    programs.useSubscribe("/create", useCallback((entry: ProgramRecord | null) => programEvent("create", entry), [programEvent]))
+    programs.useSubscribe("/install", useCallback((entry: ProgramRecord | null) => programEvent("install", entry), [programEvent]))
+    programs.useSubscribe("/uninstall", useCallback((entry: ProgramRecord | null, purge: boolean) => programEvent("uninstall", entry, purge), [programEvent]))
+    programs.useSubscribe("/forgotten", useCallback((entry: ProgramRecord | null) => programEvent("forget", entry), [programEvent]))
+    programs.useSubscribe("/pinned", useCallback((entry: Program | null, pinned: boolean) => {
+        if (!entry || typeof pinned !== "boolean") return
+        const record = sdkProgram(entry)
+        post(entry.identity, "host-program", "pinned", entry.identity, record, pinned)
+        post(entry.identity, "program-host", "pinned", entry.reference, pinned)
+    }, [post]))
+    programs.useSubscribe("/permissions", useCallback((entry: Program | null) => {
+        if (!entry) return
+        const record = sdkProgram(entry)
+        post(entry.identity, "host-program", "permissions", entry.identity, record)
+        post(entry.identity, "program-host", "permissions", entry.reference, record)
+    }, [post]))
+
+    programs.useSubscribe("/store-change", useCallback((reference: unknown, key: unknown, snapshot: unknown) => {
+        if (typeof reference !== "string" || typeof key !== "string") return
+        const entry = [...authManager.programManager.programs.values()].find(program => program.reference === reference)
+        if (entry) post(entry.identity, "program-host", "storeChange", reference, key, snapshot)
+    }, [authManager, post]))
+
+    programs.useSubscribe("/log", useCallback((reference: unknown, record: unknown) => {
+
+        if (typeof reference !== "string") return
+
+        const entry = [...authManager.programManager.programs.values()].find(program => program.reference === reference)
+
+        if (!entry) return
+
+        postVisible(access => access.canProgram(entry), "program-log", "log", reference, record)
+    }, [authManager, postVisible]))
+
+    logs.useSubscribe("/logs/log", useCallback((record: unknown) => {
+
+        postVisible(access => access.systemLogs(), "host-log", "log", "system", record)
+    }, [postVisible]))
+
+    // Open requests belong to whoever may decide them: frames with complete authority.
+    opening.useSubscribe("/request", useCallback((request: unknown) => {
+
+        postVisible(access => access.all(), "host-opening", "request", "system", request)
+    }, [postVisible]))
+
+    opening.useSubscribe("/resolve", useCallback((request: unknown, program: unknown) => {
+
+        postVisible(access => access.all(), "host-opening", "resolve", "system", request, program)
+    }, [postVisible]))
+
+    permissions.useSubscribe("/request", useCallback((request: unknown) => {
+
+        const program = permissionProgram(request)
+
+        if (program) postVisible(access => access.all(), "host-permission", "request", program, request)
+    }, [postVisible]))
+
+    permissions.useSubscribe("/resolve", useCallback((request: unknown, permission: unknown) => {
+
+        const program = permissionProgram(request)
+        const identity = domainIdentity(request)
+
+        if (!program || !identity) return
+
+        postVisible(access => access.all(), "host-permission", "resolve", program, request, permission)
+        postVisible(access => access.all(), "permission-host", "resolve", identity, request, permission)
+    }, [postVisible]))
+}
+
+function permissionProgram(value: unknown) {
+
+    if (!value || typeof value !== "object") return null
+
+    const from = (value as { from?: unknown }).from
+
+    if (!from || typeof from !== "object") return null
+
+    const process = (from as { process?: unknown }).process
+
+    if (!process || typeof process !== "object") return null
+
+    const program = (process as { program?: unknown }).program
+
+    if (!program || typeof program !== "object") return null
+
+    return domainIdentity(program)
+}
+
+function domainIdentity(value: unknown) {
+
+    if (!value || typeof value !== "object") return null
+
+    const identity = (value as { identity?: unknown }).identity
+
+    return typeof identity === "string" ? identity : null
+}
+
+async function any<Value>(values: readonly Value[], predicate: (value: Value) => Promise<boolean>) {
+
+    for (const value of values) if (await predicate(value)) return true
+
+    return false
+}
+
+function processRecord(authManager: AuthManager, process: HostedProcessRecord) {
+
+    return sdkProcess(process, program(authManager, process.program))
+}
+
+function program(authManager: AuthManager, identity: string) {
+
+    const found = authManager.programManager.programs.get(identity)
+
+    if (!found) throw new Error("The desktop does not know this program")
+
+    return found
+}
+
+type HostedProcessRecord = {
+    reference: string
+    identity: string
+    program: string
+    startedAt: Date
+    name: string | null
+    options: Record<string, string>
+    server: { ready: boolean, service: boolean } | null
+    client: { service: boolean } | null
+}

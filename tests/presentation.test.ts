@@ -1,0 +1,225 @@
+import { resolvePresentationTransaction } from "@client/view/appearance/motion"
+import assert from "node:assert/strict"
+import ClientProcessBoundary from "@client/view/components/desktop-host/client-process-boundary"
+import { presentationTransaction } from "@client/view/components/desktop-host/presentation"
+import Presentations, { type PresentationEntry } from "@client/view/components/window-manager/presentations"
+import type { WindowLayer } from "@phreshos/core"
+import { test } from "vitest"
+
+test("presentation transaction selection has no boolean compatibility values", () => {
+  assert.deepEqual(presentationTransaction({ wait: false }), { wait: false })
+  assert.deepEqual(presentationTransaction({ transaction: 2, wait: true }), { transaction: 2, wait: true })
+  // A number is a multiplier of the derived motion, never milliseconds.
+  assert.throws(() => presentationTransaction({ transaction: 120_000, wait: true }), /multiplier/)
+  assert.deepEqual(presentationTransaction({ transaction: { duration: 240, easing: "ease-out" }, wait: false }), {
+    transaction: { duration: 240, easing: "ease-out" }, wait: false
+  })
+  assert.throws(() => presentationTransaction({ transaction: true, wait: false }), /must be an object/)
+  assert.throws(() => presentationTransaction({ wait: "yes" }), /true or false/)
+})
+
+test("each Desktop owns an independent raw presentation initialized at zero", async () => {
+  const overlay = client("over")
+  const entries = entry("overlay", overlay)
+  const first = new Presentations(entries, () => overlay as never)
+  const second = new Presentations(entries, () => overlay as never)
+
+  assert.deepEqual(first.projection("overlay").position, { x: 0, y: 0 })
+  assert.deepEqual(first.projection("overlay").size, { width: 0, height: 0 })
+  assert.equal(first.projection("overlay").surface, false)
+  assert.equal(first.projection("overlay").interactive, true)
+
+  await first.setGeometry("overlay", { x: 40, y: 50, width: 600, height: 400 })
+  await first.setSurface("overlay", { color: "primary", radius: "full" })
+  first.setInteractive("overlay", false)
+  assert.deepEqual(first.projection("overlay").position, { x: 40, y: 50 })
+  assert.deepEqual(second.projection("overlay").position, { x: 0, y: 0 })
+  assert.equal(first.projection("overlay").interactive, false)
+  assert.equal(second.projection("overlay").interactive, true)
+
+  await first.setSurface("overlay", false)
+  assert.equal(first.projection("overlay").surface, false)
+
+  overlay.window.position = { x: 900, y: 900 }
+  first.reconcile(entries)
+  assert.deepEqual(first.projection("overlay").position, { x: 40, y: 50 })
+})
+
+test("transactionAndWait resolves only after the matching local animation", async () => {
+  const overlay = client("over")
+  const presentations = new Presentations(entry("overlay", overlay), () => overlay as never)
+  const request = { transaction: { duration: 200, easing: "ease-out" } as const, wait: true }
+
+  const moving = presentations.move("overlay", { x: 30, y: 40 }, request)
+  const animation = presentations.projection("overlay").geometryAnimation
+  assert.deepEqual(animation?.transaction, request.transaction)
+  presentations.complete("overlay", "geometry", animation!.revision)
+  await moving
+
+  const interrupted = presentations.move("overlay", { x: 50, y: 60 }, request)
+  await presentations.move("overlay", { x: 70, y: 80 }, { wait: false })
+  await assert.rejects(interrupted, /interrupted/)
+
+  const usingAppearance = presentations.setSurface("overlay", true, { wait: true })
+  const surface = presentations.projection("overlay").surfaceAnimation
+  assert.equal(surface?.transaction, undefined)
+  presentations.complete("overlay", "surface", surface!.revision)
+  await usingAppearance
+})
+
+test("a standard Window follows authoritative state but accepts only move gestures", async () => {
+  const ordinary = client("window")
+  const entries = entry("ordinary", ordinary)
+  const presentations = new Presentations(entries, () => ordinary as never)
+
+  ordinary.window.position = { x: 80, y: 90 }
+  ordinary.window.size = { width: 500, height: 350 }
+  presentations.reconcile(entries)
+  assert.deepEqual(presentations.projection("ordinary").position, ordinary.window.position)
+  assert.throws(() => presentations.move("ordinary", { x: 1, y: 2 }), /does not support raw/)
+  assert.throws(() => presentations.setSurface("ordinary", false), /does not support raw/)
+
+  ordinary.window.maximized = true
+  presentations.reconcile(entries)
+  const maximizing = presentations.projection("ordinary").geometryAnimation
+  assert.equal(presentations.projection("ordinary").maximized, true)
+  assert.ok(maximizing)
+
+  presentations.complete("ordinary", "geometry", maximizing.revision)
+  ordinary.window.maximized = false
+  presentations.reconcile(entries)
+  const restoring = presentations.projection("ordinary").geometryAnimation
+  assert.equal(presentations.projection("ordinary").maximized, false)
+  assert.ok(restoring)
+  assert.notEqual(restoring.revision, maximizing.revision)
+
+  const events: unknown[] = []
+  let ready!: () => void
+  let finish!: () => void
+  presentations.registerMoveGesture("ordinary", {
+    begin(origin, point) {
+      events.push([origin, point])
+      return {
+        ready: new Promise<void>(resolve => { ready = resolve }),
+        finished: new Promise<void>(resolve => { finish = resolve }),
+        cancel() { events.push("gesture-cancel") }
+      }
+    },
+    cancel() { events.push("cancel") }
+  })
+  const beginning = presentations.beginMoveGesture("ordinary", "gesture", { x: 10, y: 20 }, { x: 30, y: 40 })
+  assert.deepEqual(events, [[{ x: 10, y: 20 }, { x: 30, y: 40 }]])
+  ready()
+  await beginning
+  const moving = presentations.waitMoveGesture("ordinary", "gesture")
+  finish()
+  await moving
+})
+
+test("a Client boundary initializes each new document exactly once", async () => {
+  const lifecycle: string[] = []
+  const boundary = new ClientProcessBoundary(
+    "requester",
+    { contentWindow: null } as unknown as HTMLIFrameElement,
+    { processManager: { async ownFrame() {}, async releaseFrame() {} } } as never,
+    { state: () => ({ size: { width: 1, height: 1 }, offset: { x: 0, y: 0 } }), move: () => undefined },
+    {} as never,
+    {} as never,
+    { begin(identity: string) { lifecycle.push(identity) }, cancelMoveGestures() {} } as never
+  )
+  await boundary.own("first-owner")
+  await boundary.own("second-owner")
+  await boundary.release()
+  assert.deepEqual(lifecycle, ["requester", "requester"])
+})
+
+test("a new Client document preserves its mounted Desktop geometry representation", () => {
+  const ordinary = client("window")
+  const entries = entry("ordinary", ordinary)
+  const presentations = new Presentations(entries, () => ordinary as never)
+  const geometry = { x: 20, y: 30, width: 400, height: 300 }
+
+  presentations.represent("ordinary", {
+    read: () => geometry,
+    watch: () => () => undefined,
+    present() {},
+    begin: () => geometry,
+    finish() {},
+    cancel() {}
+  })
+
+  presentations.begin("ordinary")
+
+  assert.deepEqual(presentations.representedGeometry("ordinary"), geometry)
+
+  presentations.reconcile(new Map())
+
+  assert.equal(presentations.representedGeometry("ordinary"), null)
+})
+
+test("a standard Window presentation survives its iframe document load", () => {
+  const ordinary = client("window")
+  const entries = entry("ordinary", ordinary)
+  const presentations = new Presentations(entries, () => ordinary as never)
+
+  ordinary.window.position = { x: 80, y: 90 }
+  ordinary.window.maximized = true
+  presentations.reconcile(entries)
+
+  const before = presentations.projection("ordinary")
+  assert.ok(before.geometryAnimation)
+
+  presentations.begin("ordinary")
+
+  assert.equal(presentations.projection("ordinary"), before)
+})
+
+function entry(process: string, selected: ReturnType<typeof client>) {
+  return new Map([[process, { identity: `${process}:0`, client: selected }]]) as unknown as ReadonlyMap<string, PresentationEntry>
+}
+
+function client(layer: WindowLayer) {
+  return {
+    window: {
+      title: "Window",
+      header: layer === "window",
+      position: { x: 10, y: 20 },
+      size: { width: 300, height: 200 },
+      minimized: false,
+      maximized: false,
+      layer,
+      depth: 1
+    }
+  }
+}
+
+test("a drawing's box is heard at every step it moves, not only when it settles", () => {
+  const ordinary = client("window")
+  const presentations = new Presentations(entry("ordinary", ordinary), () => ordinary as never)
+  let step: () => void = () => undefined
+  let stopped = false
+  presentations.represent("ordinary", {
+    read: () => ({ x: 20, y: 30, width: 400, height: 300 }),
+    watch: listener => { step = listener; return () => { stopped = true } },
+    present() {},
+    begin: () => null,
+    finish() {},
+    cancel() {}
+  })
+  let heard = 0
+  presentations.observe(() => { heard++ })
+
+  step()
+  step()
+  assert.equal(heard, 2)
+
+  presentations.reconcile(new Map())
+  assert.equal(stopped, true)
+})
+
+test("a presentation write moves on the derived motion, that motion stretched, or an exact one", () => {
+  const derived = { duration: 300, easing: [0.22, 1, 0.36, 1] as const }
+  assert.equal(resolvePresentationTransaction(undefined, derived), derived)
+  assert.deepEqual(resolvePresentationTransaction(2, derived), { duration: 600, easing: derived.easing })
+  assert.deepEqual(resolvePresentationTransaction({ duration: 90, easing: "linear" }, derived), { duration: 90, easing: "linear" })
+})

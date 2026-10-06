@@ -1,0 +1,110 @@
+import { ProgramRecord } from "@server/core/link-manager/auth-manager/program-manager/entry"
+import { parsePermissions, type Launch, type Permissions, type ProgramInstallOptions, type ProgramUninstallOptions } from "@phreshos/core"
+import ProgramManager from "./program-manager"
+
+/**
+ * A program this session knows about, rebuilt from what the core
+ * represented. What it holds is what a program says of itself and what
+ * is needed to draw it — never a path, because this side has no disk
+ * and where the machine put things is not a program's own word.
+ *
+ * Running it is a request; the process appears when its start echoes.
+ */
+export default class Program {
+
+    public readonly programManager: ProgramManager
+
+    public readonly identity: string
+
+    public readonly assetId: string
+
+    /** Opaque identity of this runtime Program entity. */
+    public readonly reference: string
+
+    public readonly installed: boolean
+
+    public readonly name: string
+
+    public readonly version: string
+
+    public readonly description: string | null
+
+    public readonly categories: readonly string[]
+
+    public readonly keywords: readonly string[]
+
+    public readonly hasAgent: boolean
+
+    public readonly server: ProgramRecord["server"]
+
+    public readonly client: ProgramRecord["client"]
+
+    /** Effective authority synchronized with the authoritative Program state. */
+    public permissions: Permissions
+
+    public constructor(programManager: ProgramManager, payload: ProgramRecord) {
+
+        this.programManager = programManager
+
+        this.identity = payload.identity
+
+        this.assetId = payload.assetId
+
+        this.reference = payload.reference
+
+        this.installed = payload.installed
+
+        this.name = payload.name
+
+        this.version = payload.version
+
+        this.description = payload.description
+
+        this.categories = payload.categories
+
+        this.keywords = payload.keywords
+
+        this.hasAgent = payload.hasAgent
+
+        this.server = payload.server
+
+        this.client = payload.client
+
+        this.permissions = parsePermissions(payload.permissions)
+    }
+
+    public updatePermissions(permissions: unknown) {
+
+        this.permissions = parsePermissions(permissions)
+    }
+
+    public async createProcess(launch: Launch = {}) {
+
+        await this.programManager.$outbound.publish("/create-process", this.address, launch)
+    }
+
+    public async open() {
+
+        await this.createProcess()
+    }
+
+    public install(options: ProgramInstallOptions = {}, asker = "") {
+
+        return this.programManager.command(this.address, "install", options, asker)
+    }
+
+    public uninstall(options: ProgramUninstallOptions = {}, asker = "") {
+
+        return this.programManager.command(this.address, "uninstall", options, asker)
+    }
+
+    public async forget(asker: string) {
+
+        await this.programManager.forget(this.address, asker)
+    }
+
+    private get address() {
+
+        return { identity: this.identity, reference: this.reference }
+    }
+}

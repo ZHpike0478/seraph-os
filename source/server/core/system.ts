@@ -1,0 +1,669 @@
+import type Application from "./application"
+import { name, release, version } from "@/source/identity"
+import { IconRenderer, isIconSize } from "./link-manager/auth-manager/program-manager/icon"
+import type Entry from "./link-manager/auth-manager/program-manager/entry"
+import type Program from "./link-manager/auth-manager/program-manager/program"
+import type Process from "./link-manager/auth-manager/process-manager/process"
+import type {
+    ClientLaunch,
+    AuthenticationRequirements,
+    AuthenticationState,
+    Launch,
+    ProgramInstallOptions,
+    ProgramUninstallOptions,
+    SystemAbout,
+    SystemProgramListOptions,
+    PermissionInput,
+    PermissionName,
+    Position,
+    ServerLaunch,
+    ShellOptions,
+    Size,
+    WindowGeometry
+} from "@phreshos/core"
+import { opensType } from "@phreshos/core"
+import type { Half, TrafficKind } from "./link-manager/auth-manager/process-manager/process-traffic"
+import { processReference, type ProcessReference } from "./link-manager/auth-manager/process-manager/endpoint-reference"
+import type { Area, Watching } from "./link-manager/auth-manager/program-manager/program-manager"
+import shell from "./shell"
+import type FileArea from "@libs/file-area"
+
+type Endpoint = "server" | "client"
+type ProgramSource = Parameters<Application["linkManager"]["authManager"]["programManager"]["create"]>[0]
+
+/**
+ * The authoritative System domain shared by every trusted boundary.
+ *
+ * A transport may validate, authenticate, serialize, or stream an operation,
+ * but it does not implement System behavior. Both the in-process Server
+ * boundary and the owner Gateway resolve and mutate entities through here.
+ */
+export default class System {
+
+    /** When this System started: its uptime is counted from here. */
+    private readonly startedAt = new Date()
+
+    /** Renders the System's own icon at each standard size, once. */
+    private iconRenderer: IconRenderer | null = null
+
+    public constructor(private readonly application: Application) {}
+
+    public shell(command: string, options: ShellOptions = {}) {
+
+        return shell(command, options)
+    }
+
+    public listPrograms(options: SystemProgramListOptions = {}) {
+
+        return [...this.programManager.programs.values()].filter(entry =>
+            (options.installed === undefined || entry.installed === options.installed)
+            && (options.opens === undefined || opensType(entry.program.config.opens ?? [], options.opens)))
+    }
+
+    public findProgram(identity: string) {
+
+        return this.programManager.programs.get(identity) ?? null
+    }
+
+    public requireProgram(identity: string) {
+
+        const entry = this.findProgram(identity)
+
+        if (!entry) throw new Error(`Unknown Program "${identity}"`)
+
+        return entry
+    }
+
+    /** Resolve an exact Program handle without retargeting a replacement. */
+    public holdProgram(value: unknown, fallback?: Program) {
+
+        if (value === undefined || value === null) {
+
+            if (fallback) return fallback
+
+            throw new Error("A Program handle is required")
+        }
+
+        if (!isHandleAddress(value)) throw new Error("The boundary returned an invalid Program handle")
+
+        const program = this.programManager.reach(value.identity)
+
+        if (!program || program.reference !== value.reference) throw new Error("The Program represented by this handle does not exist")
+
+        return program
+    }
+
+    public async createProgram(source: ProgramSource) {
+
+        return this.programManager.create(source)
+    }
+
+    public async forceCreateProgram(source: ProgramSource, asker: string | null = null) {
+
+        return this.programManager.forceCreate(source, asker)
+    }
+
+    public programPermissions(program: Program) {
+
+        return this.programManager.permissions(program)
+    }
+
+    public programPermission<Name extends PermissionName>(program: Program, name: Name) {
+
+        return this.programManager.permission(program, name)
+    }
+
+    public setProgramPermission<Name extends PermissionName>(
+        program: Program,
+        name: Name,
+        permission: Exclude<PermissionInput<Name>, null>
+    ) {
+
+        return this.programManager.setPermission(program, name, permission)
+    }
+
+    public listProcesses(program?: Program) {
+
+        return [...this.processManager.processes.values()].filter(process => !program || process.program === program)
+    }
+
+    public findProcess(identity: string, program?: Program) {
+
+        const exact = this.processManager.processes.get(identity)
+
+        if (!program) return exact ?? null
+        if (exact?.program === program) return exact
+
+        return this.listProcesses(program).find(process => process.name === identity) ?? null
+    }
+
+    public requireProcess(identity: string, program?: Program) {
+
+        const process = this.findProcess(identity, program)
+
+        if (!process) {
+
+            const scope = program ? ` in Program "${program.identity}"` : ""
+
+            throw new Error(`Unknown Process "${identity}"${scope}`)
+        }
+
+        return process
+    }
+
+    /** Resolve an exact Process handle without retargeting a replacement. */
+    public holdProcess(value: unknown, fallback?: Process) {
+
+        if (value === undefined || value === null) {
+
+            if (fallback) return fallback
+
+            throw new Error("A Process handle is required")
+        }
+
+        if (!isHandleAddress(value)) throw new Error("The boundary returned an invalid Process handle")
+
+        const process = this.processManager.processes.get(value.identity)
+
+        if (!process || process.reference !== value.reference) throw new Error("The Process represented by this handle does not exist")
+
+        return process
+    }
+
+    public resolveProcess(input: { process: string, program?: string }) {
+
+        const program = input.program ? this.requireProgram(input.program).program : undefined
+
+        return this.requireProcess(input.process, program)
+    }
+
+    public async createProcess(program: string | Program, launch: Launch = {}, parent: Process | string | null = null) {
+
+        return this.programManager.createProcess(typeof program === "string" ? this.requireProgram(program) : program, launch, parent)
+    }
+
+    public async findOrCreateProcess(program: string | Program, launch: Launch & { name: string }, parent: Process | string | null = null) {
+
+        return this.programManager.findOrCreateProcess(typeof program === "string" ? this.requireProgram(program) : program, launch, parent)
+    }
+
+    public runProcess(program: Program, launch: Launch = {}, watching?: Watching, parent: Process | null = null) {
+
+        return this.programManager.runProcess(program, launch, watching, parent)
+    }
+
+    public exitProgramProcesses(program: Program, asker: string | null = null) {
+
+        return this.processManager.exitAll(program.identity, asker)
+    }
+
+    public async exitProcess(process: Process) {
+
+        return this.processManager.exit(process.identity)
+    }
+
+    public async startEndpoint(process: Process, endpoint: "server", launch?: ServerLaunch): Promise<void>
+    public async startEndpoint(process: Process, endpoint: "client", launch?: ClientLaunch): Promise<void>
+    public async startEndpoint(process: Process, endpoint: Endpoint, launch?: ServerLaunch | ClientLaunch) {
+
+        if (endpoint === "server") await this.processManager.startServer(process.identity, launch as ServerLaunch)
+        else await this.processManager.startClient(process.identity, launch as ClientLaunch)
+    }
+
+    public async stopEndpoint(process: Process, endpoint: Endpoint) {
+
+        if (endpoint === "server") await this.processManager.stopServer(process.identity)
+        else await this.processManager.stopClient(process.identity)
+    }
+
+    public endpointSnapshot(process: Process, endpoint: Endpoint) {
+
+        return Object.freeze({
+            process: process.identity,
+            program: process.program.identity,
+            endpoint,
+            declared: process.program[endpoint] !== null,
+            running: process[endpoint] !== null,
+            service: process[endpoint]?.service ?? false
+        })
+    }
+
+    public observe(domain: "program" | "process" | "window" | "connection" | "session" | "service", event: string, subject: string | null, subscriber: (event: string, ...values: unknown[]) => void) {
+
+        return this.processManager.observeHost(domain, event, subject, subscriber)
+    }
+
+    public listConnections() {
+
+        return this.application.linkManager.connections()
+    }
+
+    public authenticationState(): AuthenticationState {
+
+        return Object.freeze({ username: this.application.authentication.username })
+    }
+
+    public authenticationRequirements(): AuthenticationRequirements {
+
+        return this.application.authentication.requirements()
+    }
+
+    public setAuthenticationCredentials(credentials: unknown) {
+
+        return this.application.authentication.setCredentials(credentials)
+    }
+
+    public signOutAllSessions() {
+
+        return this.application.linkManager.signOutAllSessions()
+    }
+
+    public findConnection(identity: string) {
+
+        return this.application.linkManager.findConnection(identity)
+    }
+
+    public connectionSnapshot(identity: string) {
+
+        const connection = this.findConnection(identity)
+
+        return connection
+
+            ? this.application.linkManager.connectionSnapshot(connection)
+
+            : Object.freeze({ identity, connected: false, session: null })
+    }
+
+    public connectionSession(identity: string) {
+
+        const connection = this.findConnection(identity)
+
+        if (!connection) return null
+
+        const session = this.application.linkManager.sessionOf(connection)
+
+        return session ? this.application.linkManager.sessionSnapshot(session) : null
+    }
+
+    public signInConnection(identity: string) {
+
+        const connection = this.findConnection(identity)
+
+        if (!connection) throw new Error("Connection not found")
+
+        return this.application.linkManager.signInConnection(connection)
+    }
+
+    public listSessions() {
+
+        return this.application.authentication.sessionsList()
+    }
+
+    public findSession(identity: string) {
+
+        return this.application.authentication.sessionFind(identity)
+    }
+
+    public sessionSnapshot(identity: string) {
+
+        return this.application.linkManager.sessionSnapshot(identity)
+    }
+
+    public sessionConnections(identity: string) {
+
+        return this.findSession(identity)
+
+            ? this.application.linkManager.sessionConnections(identity)
+
+            : []
+    }
+
+    public signOutSession(identity: string) {
+
+        return this.application.linkManager.signOutSession(identity)
+    }
+
+    public observeEndpoint(process: Process, endpoint: Half, event: string | null, subscriber: (payload: unknown, event: string) => void, impossible?: (reason: string) => void) {
+
+        return this.processManager.observeEndpoint(process.identity, endpoint, event, subscriber, impossible)
+    }
+
+    public observeTraffic(process: Process, endpoint: Half, kind: TrafficKind, event: string | null, subscriber: (event: string, ...values: unknown[]) => void, impossible?: (reason: string) => void) {
+
+        return this.processManager.observeTrafficFromOutside(process.identity, endpoint, kind, event, subscriber, impossible)
+    }
+
+    public publishEndpoint(process: Process, endpoint: Half, event: string, payload: unknown) {
+
+        return this.processManager.publishFromOutside(process.identity, endpoint, event, payload)
+    }
+
+    public askEndpoint(process: Process, event: string, payload: unknown, timeout = 10_000, signal?: AbortSignal) {
+
+        return this.processManager.askFromOutside(process.identity, event, payload, timeout, signal)
+    }
+
+    public windowSnapshot(process: Process) {
+
+        return this.processManager.windowSnapshot(process.identity)
+    }
+
+    public async moveWindow(process: Process, position: Position) {
+
+        await this.processManager.move(process.identity, position)
+    }
+
+    public async resizeWindow(process: Process, size: Size) {
+
+        await this.processManager.resize(process.identity, size)
+    }
+
+    public async setWindowGeometry(process: Process, geometry: WindowGeometry) {
+
+        await this.processManager.setGeometry(process.identity, geometry)
+    }
+
+    public async maximizeWindow(process: Process, maximized: boolean) {
+
+        await this.processManager.maximize(process.identity, maximized)
+    }
+
+    public async minimizeWindow(process: Process, minimized: boolean) {
+
+        await this.processManager.minimize(process.identity, minimized)
+    }
+
+    public async setWindowTitle(process: Process, title: string) {
+
+        await this.processManager.setTitle(process.identity, title)
+    }
+
+    public async setWindowHeader(process: Process, header: boolean) {
+
+        await this.processManager.setHeader(process.identity, header)
+    }
+
+    public async raiseWindow(process: Process) {
+
+        await this.processManager.raise(process.identity)
+    }
+
+    public programSnapshot(entry: Entry) {
+
+        const program = entry.program
+
+        return Object.freeze({
+            reference: program.reference,
+            identity: program.identity,
+            assetId: program.assetId,
+            name: program.name,
+            version: program.version,
+            description: program.config.description ?? null,
+            installed: entry.installed,
+            hasAgent: program.agentPath !== null,
+            server: program.server ? Object.freeze({ start: program.server.start, service: program.server.service }) : null,
+            client: program.client ? Object.freeze({
+                start: program.client.start,
+                service: program.client.service,
+                title: program.client.title ?? null,
+                header: program.client.header ?? null,
+                size: program.client.size ?? null,
+                position: program.client.position ?? null,
+                layer: program.client.layer ?? null,
+                minimize: program.client.minimize ?? null,
+                maximize: program.client.maximize ?? null
+            }) : null
+        })
+    }
+
+    public processSnapshot(process: Process) {
+
+        return this.describeProcess(processReference(process), process.parent?.identity ?? null)
+    }
+
+    public processSnapshotFromReference(process: ProcessReference) {
+
+        return this.describeProcess(process, null)
+    }
+
+    private describeProcess(process: ProcessReference, parent: string | null) {
+
+        const owner = process.program
+
+        return Object.freeze({
+            reference: process.reference,
+            identity: process.identity,
+            name: process.name,
+            program: owner.identity,
+            programSnapshot: Object.freeze({
+                reference: owner.reference,
+                identity: owner.identity,
+                assetId: owner.assetId,
+                name: owner.name,
+                version: owner.version,
+                description: owner.description,
+                hasAgent: owner.hasAgent,
+                server: owner.server,
+                client: owner.client
+            }),
+            parent,
+            options: Object.freeze({ ...process.options }),
+            startedAt: process.startedAt.toISOString(),
+            server: Object.freeze({ declared: owner.server !== null, running: process.server !== null, service: process.server?.service ?? false }),
+            client: Object.freeze({ declared: owner.client !== null, running: process.client !== null, service: process.client?.service ?? false })
+        })
+    }
+
+    /** What this System is, as its identity declares it, and when it started. Anyone may read it: it is not a secret. */
+    public about(): SystemAbout {
+
+        return Object.freeze({ name, version, release, startedAt: this.startedAt })
+    }
+
+    /** The System's own icon as PNG bytes at one standard size. Anyone may read it. */
+    public async icon(size: unknown = "medium") {
+
+        if (!isIconSize(size)) throw new Error("A System icon size is small, medium, or large")
+
+        this.iconRenderer ??= new IconRenderer(this.application.icons.system)
+
+        return [...await this.iconRenderer.render(size)]
+    }
+
+    public get appearance() {
+
+        return this.application.appearanceManager.value
+    }
+
+    public updateAppearance(value: unknown) {
+
+        return this.application.linkManager.updateAppearance(value)
+    }
+
+    public observeAppearance(subscriber: (value: unknown) => void) {
+
+        return this.application.linkManager.appearance.tunnel.subscribe("change", subscriber)
+    }
+
+    public programIcon(program: Program, size: unknown) {
+
+        return this.programManager.icon(program, size)
+    }
+
+    public programAgent(program: Program) {
+
+        return this.programManager.agent(program)
+    }
+
+    public programDefinition(program: Program) {
+
+        return this.programManager.definition(program)
+    }
+
+    public programStartup(program: Program, operation: string, value?: unknown) {
+
+        return this.programManager.startup(program, operation, value)
+    }
+
+    public programPinned(program: Program, operation: "get" | "pin" | "unpin") {
+
+        return this.programManager.pinned(program, operation)
+    }
+
+    public programInstalled(program: Program) {
+
+        return this.programManager.installed(program)
+    }
+
+    public forgetProgram(program: Program, asker: string | null = null) {
+
+        return this.programManager.forget(program, asker)
+    }
+
+    public installProgram(program: Program, options: ProgramInstallOptions = {}, asker: string | null = null) {
+
+        return this.programManager.installStreaming(program, options, asker)
+    }
+
+    public uninstallProgram(program: Program, options: ProgramUninstallOptions = {}, asker: string | null = null) {
+
+        return this.programManager.uninstallStreaming(program, options, asker)
+    }
+
+    public programArea(program: Program, area: Area, operation: string, args: unknown[]) {
+
+        return this.programManager.operate(program, area, operation, args)
+    }
+
+    public programStoragePath(program: Program, area: Area) {
+
+        return this.programManager.area(program, area, "path", [])
+    }
+
+    public nativeStorage(operation: string, joins: string[], input?: unknown) {
+
+        return operateArea(this.application.home, operation, joins, input)
+    }
+
+    public nativeStorageStream(joins: string[], options: { offset?: number, length?: number } = {}) {
+
+        return this.application.home.stream(joins, [options.offset, options.length])
+    }
+
+    public nativeStorageWrite(joins: string[], content: ReadableStream<Uint8Array>, overwrite = true, signal?: AbortSignal) {
+
+        return this.application.home.write(joins, content, signal, overwrite)
+    }
+
+    public nativeStorageAppend(joins: string[], content: ReadableStream<Uint8Array>, signal?: AbortSignal) {
+
+        return this.application.home.append(joins, content, signal)
+    }
+
+    public nativeStorageWatch(joins: string[], recursive: boolean, signal?: AbortSignal) {
+
+        return this.application.home.watch(joins, recursive, signal)
+    }
+
+    public programStore(program: Program, operation: string, key: string, value?: unknown, ttl?: unknown) {
+
+        return this.programManager.store(program, operation, key, value, ttl)
+    }
+
+    public programQuery(program: Program, database: "logs" | "database", statement: string, values: unknown[]) {
+
+        return (database === "logs" ? this.programManager.logsOf(program) : this.programManager.databaseOf(program)).query(statement, values)
+    }
+
+    public endpointIsService(process: Process, endpoint: Half) {
+
+        return this.processManager.endpointIsServiceFromOutside(process.identity, endpoint)
+    }
+
+    public serviceAvailable(address: unknown) {
+
+        return this.processManager.serviceAvailableFromOutside(address)
+    }
+
+    public listServices(name?: string) { return this.processManager.listServicesFromOutside(name) }
+
+    public waitServiceReady(address: unknown, timeout?: number) {
+
+        return this.processManager.waitServiceReadyFromOutside(address, timeout)
+    }
+
+    public publishService(address: unknown, event: string, payload: unknown) {
+
+        return this.processManager.publishServiceFromOutside(address, event, payload)
+    }
+
+    public askService(address: unknown, event: string, payload: unknown, timeout = 10_000, signal?: AbortSignal) {
+
+        return this.processManager.askServiceFromOutside(address, event, payload, timeout, signal)
+    }
+
+    public observeService(address: unknown, scope: "lifecycle" | "events", event: string | null, subscriber: (event: string, payload: unknown) => unknown) {
+
+        return this.processManager.observeServiceFromOutside(address, scope, event, subscriber)
+    }
+
+    public get uploads() {
+
+        return this.application.uploads
+    }
+
+    public get storagePath() {
+
+        return this.application.home.path
+    }
+
+    private get programManager() { return this.application.linkManager.authManager.programManager }
+    private get processManager() { return this.application.linkManager.authManager.processManager }
+}
+
+function operateArea(place: FileArea, operation: string, joins: string[], input?: unknown) {
+
+    if (operation === "path") return place.resolve(joins)
+    if (operation === "name") return place.name(joins)
+    if (operation === "create") { place.create(joins); return }
+    if (operation === "clear") { place.clear(joins); return }
+
+    if (operation === "stat-storage" || operation === "stat-file") {
+        const found = place.stat(joins)
+        if (!found) return null
+        if (operation === "stat-storage") {
+            if (found.kind !== "directory") throw new Error(`${place.resolve(joins)} is not a Storage directory`)
+            return { modifiedAt: found.modifiedAt }
+        }
+        if (found.kind !== "file") throw new Error(`${place.resolve(joins)} is not a file`)
+        return { size: found.size, modifiedAt: found.modifiedAt }
+    }
+
+    if (operation === "list") {
+        const value = input as { recursive?: unknown, depth?: unknown } | undefined
+        const recursive = value?.recursive === true
+        const depth = value?.depth
+        if (depth !== undefined && (!Number.isSafeInteger(depth) || (depth as number) < 0)) throw new Error("A Storage list depth must be a non-negative safe integer")
+        if (depth !== undefined && !recursive) throw new Error("A Storage list depth requires recursive listing")
+        return place.list(joins, [recursive, depth as number | undefined])
+    }
+
+    if (operation === "delete-storage" || operation === "delete-file") {
+        const found = place.stat(joins)
+        if (found && operation === "delete-storage" && found.kind !== "directory") throw new Error(`${place.resolve(joins)} is not a Storage directory`)
+        if (found && operation === "delete-file" && found.kind !== "file") throw new Error(`${place.resolve(joins)} is not a file`)
+        place.delete(joins)
+        return
+    }
+
+    if (operation === "space") return place.space(joins)
+    throw new Error(`The host does not know the storage operation "${operation}"`)
+}
+
+function isHandleAddress(value: unknown): value is { identity: string, reference: string } {
+
+    return typeof value === "object"
+        && value !== null
+        && typeof (value as Record<string, unknown>).identity === "string"
+        && typeof (value as Record<string, unknown>).reference === "string"
+}
