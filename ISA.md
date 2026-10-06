@@ -50,3 +50,43 @@ principal_stated_goal: "yes" (continuation: 'update the handoff then start the b
 - C9 [x] SSR dialog smoke: ask renders with Allow/Deny wiring; nothing when none pending
 - C10 [x] bounded git status: exactly the 11 declared files; 250/250 verify rerun by parent (77 files)
 - Deviation ratified by parent 2026-10-06: desktop_set_theme applies via /change-desktop-preferences on the asking connection (Appearance has no theme field in @phreshos/core; old updateAppearance({theme}) path painted nothing) - evidence: SDK defaultAppearance keys inspected live
+
+# Run 3 - Assistant as Program (2026-10-06, in progress)
+
+principal_stated_goal: "continue" (build handoff item 3: seraph becomes an
+installable Program with its own desktop window reachable from the Start menu)
+
+## Design (decided before building)
+- Seed a runtime Program (identity "seraph", no client half, server half
+  naming the running server's own directory) into every account-space at
+  space-open, create-only-if-missing, so existing installs regenerate it.
+  The window itself already exists: process-window.tsx renders SeraphChat
+  natively for program "seraph".
+- Launch rides the existing useLaunch()/createProcess path. No new
+  Program/window mechanism.
+- Upstream context verified live: upstream ships NO built-in programs either
+  (CLI installs programs; Desktop falls back to DefaultShell + seed
+  wallpaper). So seeding one fork-owned program at space-open is fork-local
+  new behavior, not an upstream-parity gap.
+
+## Claims (falsifiers pending build)
+- C11: A fresh account-space has the seraph Program recorded (installed,
+  launchable) without any manual install step. FALSIFIER: wire test - a new
+  user's space programManager.programs has "seraph" with installed=true.
+- C12: Launching it from the wire creates a Process whose program is
+  "seraph"; the desktop seam (process-window.tsx) renders SeraphChat for it.
+  FALSIFIER: process record assertion + existing desktop tests stay green.
+- C13: The assistant routes stay reachable from the launched window; history
+  returns this space's own messages. FALSIFIER: wire test asserting
+  /assistant/history on a bound connection returns what the space stored.
+- C14: Restart-stability: re-opening the space (or a fresh Hub on the same
+  home) does not replace or wipe the seeded Program (create-only-if-missing).
+  FALSIFIER: two consecutive Hub/space opens keep the same program.json.
+- C15: The seed touches only the requesting space. FALSIFIER: isolation
+  suite (hub.test.ts) still passes untouched alongside the new tests.
+
+## Anti-claims
+- No upstream program-seeding mechanism imported; no CLI dependency added.
+- The chat window stays a Desktop-native view (no iframe, no client half).
+- No new permissions asked at launch (assistant runs through the existing
+  AuthManager routes).
