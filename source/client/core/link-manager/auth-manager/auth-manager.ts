@@ -6,6 +6,7 @@ import { TheLink } from "@the-link/core"
 import LinkManager from "../link-manager"
 import ShellManager from "./shell-manager"
 import PermissionManager from "./permission-manager"
+import AssistantConfirmManager from "./assistant-confirm-manager"
 import OpeningManager from "./opening-manager"
 import StreamRelay from "@client/core/link-manager/stream-relay"
 import { type StorageChange } from "@phreshos/core"
@@ -26,6 +27,8 @@ export default class AuthManager extends TheLink {
     public readonly processManager: ProcessManager
 
     public readonly permissionManager: PermissionManager
+
+    public readonly assistantConfirmManager: AssistantConfirmManager
 
     public readonly openingManager: OpeningManager
 
@@ -52,6 +55,8 @@ export default class AuthManager extends TheLink {
         this.processManager = new ProcessManager(this, payload.processManager)
 
         this.permissionManager = new PermissionManager(this, payload.permissionManager)
+
+        this.assistantConfirmManager = new AssistantConfirmManager(this, payload.assistantConfirmManager)
 
         this.openingManager = new OpeningManager(this, payload.openingManager)
 
@@ -89,6 +94,11 @@ export default class AuthManager extends TheLink {
     public async accounts(operation: "list" | "create" | "set-role" | "set-disabled" | "reset-credentials", ...values: unknown[]) {
 
         return await this.$outbound.publishFirst(`/accounts/${operation}`, ...values)
+    }
+
+    /** One assistant write confirmation decision from this Desktop. */
+    public async assistantConfirm(operation: "allow" | "deny", identity: string) {
+        return await this.$outbound.publishFirst(`/assistant-confirm/${operation}`, identity)
     }
 
     public logs(statement: string, values: unknown[] = []) {

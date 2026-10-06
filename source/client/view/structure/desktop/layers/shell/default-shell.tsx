@@ -4,6 +4,7 @@ import SystemErrors from "./dialogs/system-errors"
 import PermissionRequests from "./dialogs/permission-requests"
 import OpenRequests from "./dialogs/open-requests"
 import AccountsDialog, { AccountsButton } from "./dialogs/accounts"
+import AssistantConfirmDialog from "./dialogs/assistant-confirm"
 import StartMenu, { StartMenuButton, StartMenuProvider, useStartMenuOpen } from "./start-menu/start-menu"
 import SignOut from "./taskbar/sign-out"
 import Taskbar from "./taskbar/taskbar"
@@ -40,6 +41,8 @@ export default function DefaultShell({ spacing, taskbar, viewport, mappedWindows
         <OpenRequests />
 
         <AccountsDialog />
+
+        <AssistantConfirmDialog />
 
     </>
 }

@@ -58,7 +58,7 @@ Design decisions (confirmed by the owner):
 - Tool-calling as the user, least privilege: open/close programs, read/write
   the user's files, set theme/wallpaper, save/recall long-term memory
 - Per-user conversation history and long-term memory in the user's SQLite
-- Read tools run freely; write tools confirm in the Desktop before acting
+- Read tools run freely; write tools confirm in the Desktop before acting - DONE
 
 ## Phase 4 — Hardening and docs
 

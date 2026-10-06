@@ -7,6 +7,7 @@ import LinkManager from "../link-manager"
 import { parsePermissionName, type PermissionRequestInput } from "@phreshos/core"
 import ShellManager from "./shell-manager"
 import PermissionManager from "../../permission-manager"
+import AssistantConfirmManager from "../../assistant-confirm"
 import OpeningManager from "../../opening-manager"
 import Accounts, { type AccountRole, type AccountSnapshot } from "../../accounts"
 
@@ -22,6 +23,8 @@ export default class AuthManager extends TheLink {
 
     public readonly permissionManager: PermissionManager
 
+    public readonly assistantConfirmManager: AssistantConfirmManager
+
     public readonly openingManager: OpeningManager
 
     public readonly shellManager: ShellManager
@@ -33,6 +36,8 @@ export default class AuthManager extends TheLink {
         this.linkManager = linkManager
 
         this.permissionManager = new PermissionManager(this)
+
+        this.assistantConfirmManager = new AssistantConfirmManager(this)
 
         this.openingManager = new OpeningManager(this)
 
@@ -645,6 +650,8 @@ export default class AuthManager extends TheLink {
 
             permissionManager: this.permissionManager,
 
+            assistantConfirmManager: this.assistantConfirmManager,
+
             openingManager: this.openingManager
         }
     }
@@ -732,5 +739,6 @@ export interface AuthManagerSnapshot {
     processManager: import("./process-manager/process-manager").ProcessManagerSnapshot
 
     permissionManager: import("../../permission-manager").PermissionManagerSnapshot
+    assistantConfirmManager: import("../../assistant-confirm").AssistantConfirmManagerSnapshot
     openingManager: import("../../opening-manager").OpeningManagerSnapshot
 }

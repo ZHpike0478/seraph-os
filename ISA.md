@@ -26,3 +26,27 @@ principal_stated_goal: "yes" (to: 'build the admin UI for account management —
 - C3 [x] tests/account-routes.test.ts: the routes carry the store protection for the only administrator, then allow demotion with a second one
 - C4 [x] tests/accounts-dialog.test.tsx: 3 SSR tests - admin surface + stub call on mount, user sees nothing, button admin-only; tsc clean; wiring in default-shell.tsx
 - C5 [x] git diff bounded to the nine files in this change; accounts.ts, hub.ts, hub-gate.ts untouched (git status verified)
+
+# Run 2 — Assistant write confirmation (2026-10-06)
+
+principal_stated_goal: "yes" (continuation: 'update the handoff then start the build' — build = handoff item 2, assistant write confirmation per the confirmed dialog-per-write design in PLAN.md)
+
+## Claims
+- C6: files_write and desktop_set_theme no longer act immediately: each request pauses as a confirmation with a snapshot the Desktop can show (tool, human-readable summary of exactly what would change), and the write happens only after an explicit Allow on that connection. FALSIFIER: wire-level test asserting the file is absent until Allow and present (correct path/content) after; theme unchanged until Allow, changed after.
+- C7: Deny (or the confirmation expiring, or the requesting connection dying) means no write ever happened and the model receives a plain error it can answer in text. FALSIFIER: wire-level test asserting file absent after Deny and the model's tool result carries the refusal; timeout test with a short configured timeout; connection-abort cancels cleanly.
+- C8: Read tools and memory tools are untouched — they never pause for confirmation. FALSIFIER: regression test that files_read/list/memory round-trips complete with zero confirmations pending.
+- C9: The Desktop shows a confirmation dialog for the signed-in user's own assistant writes with Allow/Deny wiring through the manager; non-pending state renders nothing. FALSIFIER: SSR smoke test asserting the pending snapshot renders with Allow/Deny and the callbacks hit the manager stub.
+- C10: No new cross-user surface: the confirmation manager is per-space like the permission manager, and no other file's read surface changes. FALSIFIER: git diff inspection bounded to the declared file list.
+
+## Anti-claims
+- No change to assistant streaming, history/memory shapes, or the 8-round tool loop beyond the pause point in the two write tools.
+- No auto-approve fallback: an error reaching the confirm manager must fail the write to the model, never write anyway.
+- No new Program/window mechanism; the dialog joins the shell sibling dialogs.
+
+## Run 2 evidence (collapsed at close)
+- C6 [x] tests/assistant-confirm.test.ts: pause-then-Allow writes end-to-end via /auth/assistant/turn with scripted endpoint (file absent until Allow, exact content after)
+- C7 [x] same file: Deny = no write + refusal string to model; 60ms expiry; connection death resolves false and aborts the turn
+- C8 [x] same file: read/memory tools complete with zero pending confirmations
+- C9 [x] SSR dialog smoke: ask renders with Allow/Deny wiring; nothing when none pending
+- C10 [x] bounded git status: exactly the 11 declared files; 250/250 verify rerun by parent (77 files)
+- Deviation ratified by parent 2026-10-06: desktop_set_theme applies via /change-desktop-preferences on the asking connection (Appearance has no theme field in @phreshos/core; old updateAppearance({theme}) path painted nothing) - evidence: SDK defaultAppearance keys inspected live

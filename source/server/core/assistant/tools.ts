@@ -97,9 +97,19 @@ export default function assistantTools(application: Application): AssistantTool[
             },
             async execute({ path, content }: { path: string[], content: string }) {
 
-                await storage.write(path ?? [], new Blob([content]).stream())
+                const target = [...path ?? []]
 
-                return { written: [...path].join("/"), bytes: new TextEncoder().encode(content).byteLength }
+                const joined = target.join("/")
+
+                const bytes = new TextEncoder().encode(content).byteLength
+
+                const confirmed = await application.authManager.assistantConfirmManager.request("files_write", `Write ${joined} (${bytes} bytes)`)
+
+                if (!confirmed) return { error: "The user did not confirm this write" }
+
+                await storage.write(target, new Blob([content]).stream())
+
+                return { written: joined, bytes }
             }
         },
 
@@ -132,7 +142,14 @@ export default function assistantTools(application: Application): AssistantTool[
 
                 if (theme !== "light" && theme !== "dark") return { error: "The theme is light or dark" }
 
-                await application.linkManager.updateAppearance({ theme })
+                const confirmed = await application.authManager.assistantConfirmManager.request("desktop_set_theme", `Set desktop theme to ${theme}`)
+
+                if (!confirmed) return { error: "The user did not confirm this write" }
+
+                // The desktop's look-and-feel preference is the user's own
+                // Desktop choice; a theme ask applies there, on the asking
+                // connection, once allowed.
+                await application.authManager.assistantConfirmManager.pushDesktopPreference({ theme })
 
                 return { theme }
             }

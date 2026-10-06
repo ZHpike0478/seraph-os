@@ -28,6 +28,14 @@ rename those; program SDKs speak that exact wire.
   boots it (`tests/distribution.test.mjs`).
 - Ten commits, clean tree. History starts at
   `991c231` (pre-rebrand snapshot) so the upstream diff is always reviewable.
+  - 2026-10-06, commit `71634b7`: admin account management shipped (handoff
+  item 1). Five `/accounts/*` routes on the space AuthManager, gated against
+  the shared Accounts store the space's delegated Authentication already
+  holds (no hub reference enters a space); admin-only taskbar Accounts
+  button + shell dialog (create / role / disable-enable / password reset).
+  243/243 `bun run verify` green (6 new wire-level tests, including
+  non-admin refusal, bogus/anonymous refusal, last-admin protection). Still
+  no visual browser pass (wire/SSR tests only; open the Desktop by hand).
 - Live-wire verification: real messagepack WebSocket clients drove `/link`
   end-to-end (subscribe ack → anonymous owner state → bootstrap sign-up →
   session token push → second-connection sign-in → bound RPC) against the
@@ -143,9 +151,11 @@ after any port-range rename (a bad rename once produced a "valid" range).
 
 ## Known gaps / suggested order of work
 
-1. **Admin UI for account management** — the store has
-   create/reset/setRole/setDisabled but no Desktop screens and no `/accounts/*`
-   admin-gated RPC routes; bootstrap admin exists, management is manual.
+1. DONE (2026-10-06, commit `71634b7`) — Admin UI for account management: five
+   `/accounts/*` admin-gated routes on the space AuthManager + admin-only
+   taskbar Accounts button and dialog in the shell layer. Wire-level tests
+   cover admin lifecycle, non-admin/bogus/anonymous refusals, last-admin
+   protection. PLAN.md Phase 2 item 5 ticked.
 2. **Assistant write confirmation** — `files_write` and `desktop_set_theme`
    act immediately; the confirmed design (dialog per write) is in PLAN.md.
 3. **Assistant as Program** — the chat window works, but `seraph` is not yet
