@@ -16,6 +16,24 @@ Fork of PhreshOS/system @0.1.117 (MIT, © Zohayr SLILEH), rebranded as Seraph OS
 
 ## Phase 2 — Multi-user kernel (in progress)
 
+Build order (isolation before sign-in cutover, so no intermediate state leaks
+one user's data to another):
+
+1. DONE — `source/server/core/accounts.ts`: SQLite account store, admin/user
+   roles, last-admin demotion/disable lockout, scrypt credentials compatible
+   with the owner record shape, `verify` returning username + role
+   (tests/accounts.test.ts, 7 tests)
+2. Sessions carry `user`; `Authentication.open` migrates the owner record into
+   an admin account on first open; verify/sign-in resolve through Accounts
+3. Per-user process/window ownership + announcement filtering (ProcessManager
+   is 3.7k lines; this is the big retrofit — every announce* gains a user scope)
+4. Per-user storage roots (`home/users/<user>/`), program ownership,
+   appearance + uploads + desktop-file per user
+5. Sign-in cutover: `/owner/sign-in` resolves against Accounts; session ↔ user
+   binding everywhere the Desktop reads state; bootstrap admin prompt on first
+   Desktop visit; admin account management routes (`/accounts/*`, admin-only)
+6. Gateway authenticates as administrator
+
 Design decisions (confirmed by the owner):
 
 - Admin-managed accounts; each user gets a private desktop, private programs,
