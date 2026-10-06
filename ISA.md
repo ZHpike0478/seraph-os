@@ -160,3 +160,24 @@ principal_stated_goal: "continue" (build handoff item 4: bind gateway peers to a
 - C18 [x] case 3: out-of-order refused, second handshake still refused
 - C19 [x] case 4: sign-out then dead token refused for new binds
 - C20 [x] gateway.test.ts updated in place for the handshake; 259/259 verify on the parent's own run
+
+# Run 5 - Visual/desktop pass (2026-10-06)
+
+principal_stated_goal: "continue" (handoff item 5: first-boot flow, accounts dialog, assistant window in a real browser)
+
+## What ran
+- Built server booted on port 6321 with a fresh SERAPHOS_HOME; driven by
+  headless Chrome 154 over raw CDP (ws) because the harness's browser tool
+  demanded an unusable real-profile toggle (its own error). Screenshots +
+  DOM text both captured; evidence = innerText transcripts + PNGs.
+
+## Claims
+- C21: A fresh browser reaches the bootstrap sign-up screen with ZERO console exceptions and the form is drivable. FALSIFIER: driver transcript 'Create your account' + NO-EXCEPTION-SEEN + successful programmatic fill/submit.
+- C22: After sign-up the live Desktop renders with the taskbar (start menu / map / Accounts button / Sign out) and the Accounts dialog opens in pixels showing the account row + controls + create form. FALSIFIER: driver transcripts + PNGs (397KB/265KB screenshots).
+- C23: The Start menu lists the seeded Seraph Program (Programs: 1) and launching its card opens the native SeraphChat window in pixels. FALSIFIER: driver transcript 'All Programs / Seraph / 1 Program' -> 'clicked:DIV' -> window text 'Seraph / Seraph has no model yet...' + SHOT3.
+- C24: The first-boot crash found by pixels is fixed at the CONTRACT level and all suites stay green. FALSIFIER: the fix is a gate ack change verified in a real browser AND bun run verify 259/259 on the parent's machine.
+
+## Evidence (for the close)
+- Crash root cause: gate acknowledgement carried `appearance { value: null }`; the anonymous stage painted signInWallpaper from it; React threw 'Cannot read properties of null (reading signInWallpaper)' captured via CDP Runtime exception events - reproducible before, absent after.
+- Fix: hub-gate.ts acknowledgement() now answers the anonymous subscribe with `defaultAppearance` (from @phreshos/core). Enter-time push of the space's real appearance unchanged.
+- Honest residual: assistant-confirm-dialog pixels (Allow/Deny buttons in a real screen) need a configured model endpoint to drive a real write ask; covered today at SSR + code-path level only.

@@ -1,6 +1,7 @@
 import { succeeded, failed } from "@libs/request-outcome"
 import Application from "./application"
 import Hub from "./hub"
+import { defaultAppearance } from "@phreshos/core"
 import { TheLink } from "@the-link/core"
 
 /** The appearance property key every gate connection subscribes to while anonymous. */
@@ -66,11 +67,14 @@ export default class Gate extends TheLink {
      * still anonymous: a private appearance key whose updates arrive once the
      * connection enters its space, and nothing else.
      */
+    // The anonymous acknowledgement carries a USABLE default, not null: the
+    // sign-up/sign-in stage paints from it before any account-space exists
+    // (its appearance push arrives on enter).
     public acknowledgement() {
 
         return {
 
-            appearance: { key: gateAppearanceKey, value: null }
+            appearance: { key: gateAppearanceKey, value: defaultAppearance }
         }
     }
 

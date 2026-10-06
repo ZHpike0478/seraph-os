@@ -174,9 +174,22 @@ after any port-range rename (a bad rename once produced a "valid" range).
    power: a dead session can never bind a new peer. Tests cover the
    handshake, four refusal classes, order-abuse, and sign-out.
 
-5. **Visual/desktop pass** — sign-up→desktop first-boot flow in a real
-   browser, theme transitions with the gate's appearance re-key, assistant
-   window in an actual Desktop session.
+5. DONE (2026-10-06, this session) — Visual/desktop pass in a real headless
+   Chrome (CDP-driven): fresh browser → 'Create your account' bootstrap screen
+   renders with no console errors → sign-up → live Desktop (taskbar: start
+   menu, map, Accounts button, Sign out) → Accounts dialog in pixels (row:
+   role, disabled state, created date; role/disable/reset controls; create
+   form with role User/Admin) → Start menu shows Programs: 1 → the seeded
+   Seraph card launches → the native SeraphChat window opens in pixels
+   (correctly showing its no-model state; full chat/dialog pixels need a
+   configured SERAPH_LLM_BASE_URL and remain the one pixel-check TODO).
+   Screenshots in %TEMP% (seraph-desktop-signedin.png,
+   seraph-chat-window.png). The pass also FIXED a real first-boot crash the
+   suite never caught: the gate's subscribe acknowledgement carried
+   `appearance { value: null }`, the anonymous stage painted
+   `signInWallpaper` from it and React died before the sign-in UI; the ack
+   now carries `defaultAppearance` (gate.acknowledgement in hub-gate.ts).
+
 6. **Upstream sync** — upstream is an active repo (0.1.117 → newer). The
    fork's patch surface for rebases is exactly: accounts.ts, hub.ts,
    hub-gate.ts, authentication.ts (delegated mode), application.ts
