@@ -9,6 +9,7 @@ import Window from "./window"
 import useDragHold from "../drag-hold"
 import ProgramFrame, { programFrameSource } from "@client/view/components/program-frame"
 import { type ProgramAccess } from "@client/view/components/program-access"
+import SeraphChat from "@client/view/programs/seraph-chat"
 import { memo, type SyntheticEvent, useCallback, useEffect, useState } from "react"
 
 const settleDelay = 80
@@ -185,8 +186,11 @@ export default memo(function ({ identity, record, assetId, client, title, header
     >
 
         {/* A launch names one of its client half's own pages; joining it
-            to the program asset route remains the view's responsibility. */}
-        {!stopping && !closing && <ProgramFrame
+            to the program asset route remains the view's responsibility.
+            The built-in assistant owns one window that is not a frame. */}
+        {!stopping && !closing && (record.program === "seraph"
+            ? <SeraphChat />
+            : <ProgramFrame
 
             record={record}
 
@@ -208,7 +212,7 @@ export default memo(function ({ identity, record, assetId, client, title, header
 
             onLoad={loaded}
 
-        />}
+        />)}
 
         {/* Loading and closing are mutually exclusive states of the same
             progress layer. Neither paints a backdrop or Surface. */}

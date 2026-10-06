@@ -7,9 +7,13 @@ import openStore from "./open-store"
 import Keyv from "keyv"
 import FileArea, { FileSystem } from "@libs/file-area"
 import { homedir } from "node:os"
+import { join } from "node:path"
 import System from "./system"
 import createServerRuntime from "./server-runtime/factory"
 import SystemLogs from "./logs"
+import AssistantMemory from "./assistant/memory"
+import Assistant, { assistantConfiguration, type AssistantConfigurationValues } from "./assistant/assistant"
+import assistantTools from "./assistant/tools"
 
 export default class Application {
 
@@ -59,6 +63,17 @@ export default class Application {
     /** Core-owned factory for every Server execution environment. */
     public readonly createServerRuntime: typeof createServerRuntime
 
+    /** The assistant of this space; null while no model endpoint is configured. */
+    public get assistant(): Assistant | null {
+
+        return this.assistantInstance
+    }
+
+    /** One space's assistant memory, open even before a model is configured. */
+    public readonly assistantMemory: AssistantMemory
+
+    private assistantInstance: Assistant | null
+
     private constructor(payload: ApplicationPayload) {
 
         this.icons = payload.icons
@@ -75,6 +90,16 @@ export default class Application {
 
         this.appearanceManager = payload.appearanceManager
 
+        this.assistantMemory = payload.assistantMemory
+
+        // A model endpoint configured at boot brings the assistant with it;
+        // the tools see the finished application that carries them.
+        this.assistantInstance = payload.assistantConfiguration
+
+            ? Assistant.open(payload.assistantConfiguration, payload.assistantMemory, assistantTools(this as unknown as Application))
+
+            : null
+
         this.createServerRuntime = createServerRuntime
 
         this.logs = new SystemLogs(this.storage.join("logs.sqlite"))
@@ -82,6 +107,16 @@ export default class Application {
         this.linkManager = new LinkManager(this)
 
         this.system = new System(this)
+    }
+
+    /** Closes the space's own databases; tests use this before removing homes. */
+    public close() {
+
+        try { this.assistantMemory.close() }
+        catch { }
+
+        try { this.logs.close() }
+        catch { }
     }
 
     public static async initialize(homePath: string, icons: ApplicationIcons, authentication?: Authentication, options?: { nativeRoot?: string }) {
@@ -98,7 +133,9 @@ export default class Application {
 
         const appearanceManager = await AppearanceManager.open(store, uploads)
 
-        const application = new Application({ icons, storage, home, store, authentication, appearanceManager, uploads })
+        const assistantMemory = AssistantMemory.open(join(homePath, "assistant.sqlite"))
+
+        const application = new Application({ icons, storage, home, store, authentication, appearanceManager, uploads, assistantMemory, assistantConfiguration: assistantConfiguration(process.env) })
 
         await application.linkManager.authManager.programManager.initialize()
 
@@ -124,4 +161,8 @@ interface ApplicationPayload {
     appearanceManager: AppearanceManager
 
     uploads: UploadManager
+
+    assistantMemory: AssistantMemory
+
+    assistantConfiguration: AssistantConfigurationValues | null
 }

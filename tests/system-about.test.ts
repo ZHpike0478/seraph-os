@@ -21,6 +21,7 @@ test("the System says what it is from its identity, and when it started", async 
     }
     finally {
         await application.store.disconnect()
-        await rm(home, { recursive: true, force: true })
+        application.close()
+        await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
 }, 60_000)

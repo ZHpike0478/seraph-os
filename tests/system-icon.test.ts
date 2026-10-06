@@ -22,6 +22,7 @@ test("the System renders its own icon at each standard size, and only those", as
     }
     finally {
         await application.store.disconnect()
-        await rm(home, { recursive: true, force: true })
+        application.close()
+        await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
 }, 60_000)

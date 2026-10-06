@@ -48,7 +48,8 @@ test("an RPC result returns only to its requesting boundary", async () => {
         stop()
         await application.linkManager.removeConnection(boundary)
         await application.store.disconnect()
-        await rm(home, { recursive: true, force: true })
+        application.close()
+        await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
 })
 

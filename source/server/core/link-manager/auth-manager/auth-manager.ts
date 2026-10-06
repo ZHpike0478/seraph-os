@@ -456,6 +456,80 @@ export default class AuthManager extends TheLink {
         return this.linkManager.application.logs.query(String(statement), Array.isArray(values) ? values : [])
     }
 
+    /** What Seraph offers this user's desktop right now. */
+    @Subscribe("/assistant/state")
+    protected assistantState() {
+
+        const assistant = this.linkManager.application.assistant
+
+        return {
+
+            available: assistant !== null,
+
+            tools: assistant?.toolCatalog() ?? []
+        }
+    }
+
+    /** The user's conversation with Seraph, oldest first. */
+    @Subscribe("/assistant/history")
+    protected assistantHistory() {
+
+        return this.linkManager.application.assistantMemory.recent(40)
+    }
+
+    /** One conversational turn: streamed to this connection, then answered whole. */
+    @Subscribe("/assistant/turn")
+    protected async assistantTurn(content: unknown) {
+
+        if (typeof content !== "string" || !content.trim()) throw new Error("A chat turn needs content")
+
+        const application = this.linkManager.application
+
+        const assistant = application.assistant
+
+        if (!assistant) throw new Error("No model endpoint is configured for the assistant (SERAPH_LLM_BASE_URL)")
+
+        // AuthManager.connection() is the invoking connection's identity.
+        const connection = this.connection()
+
+        let reply = ""
+
+        for await (const chunk of assistant.turn(content)) {
+
+            if (chunk.delta) {
+
+                reply += chunk.delta
+
+                await this.publishToBoundary(connection, "/assistant/chunk", chunk.delta).catch(() => undefined)
+            }
+        }
+
+        // The done sentinel: an empty delta the receiving relay knows.
+        await this.publishToBoundary(connection, "/assistant/chunk", "").catch(() => undefined)
+
+        return reply
+    }
+
+    /** Forgets one saved memory fact. */
+    @Subscribe("/assistant/forget")
+    protected assistantForget(identity: unknown) {
+
+        if (!Number.isSafeInteger(identity)) throw new Error("A memory identity is required")
+
+        this.linkManager.application.assistantMemory.forget(identity as number)
+
+        return true
+    }
+
+    /** Clears conversation history; saved facts survive. */
+    @Subscribe("/assistant/clear")
+    protected assistantClear() {
+
+        this.linkManager.application.assistantMemory.clearConversation()
+
+        return true
+    }
+
     public async writeArea(sessionToken: unknown, program: unknown, area: "data" | "cache", path: string[], content: ReadableStream<Uint8Array> | null, signal?: AbortSignal, overwrite = true) {
 
         this.verify(sessionToken)

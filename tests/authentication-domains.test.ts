@@ -83,6 +83,7 @@ test("browser Connections and Sessions form one authoritative lifecycle", async 
         await application.linkManager.removeConnection(connection)
         if (!secondRemoved) await application.linkManager.removeConnection(secondConnection)
         await application.store.disconnect()
-        await rm(home, { recursive: true, force: true })
+        application.close()
+        await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
 })
