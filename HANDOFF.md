@@ -165,9 +165,15 @@ after any port-range rename (a bad rename once produced a "valid" range).
    endpoint launch, restart stability, per-space isolation, and corrupted-
    seed tolerance.
 
-4. **Gateway authenticates per session** — the loopback socket currently
-   trusts transport-level isolation (same as upstream's owner model); bind
-   gateway peers to an explicit admin token before multi-tenant hosts.
+4. DONE (2026-10-06) — Gateway authenticates per session: every peer first sends
+   `/gateway/authenticate` {token}; the System resolves it through the session
+   index and requires a live, non-disabled administrator account; only then it
+   binds the external boundary and pushes `/gateway/ready` (shape unchanged).
+   Refusals answer the call itself (none/non-admin/disabled/unknown,
+   out-of-order) and the door closes. Sign-out kills the token's minting
+   power: a dead session can never bind a new peer. Tests cover the
+   handshake, four refusal classes, order-abuse, and sign-out.
+
 5. **Visual/desktop pass** — sign-up→desktop first-boot flow in a real
    browser, theme transitions with the gate's appearance re-key, assistant
    window in an actual Desktop session.

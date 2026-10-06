@@ -95,11 +95,68 @@ installable Program with its own desktop window reachable from the Start menu)
 - Seed point chosen: homePath/programs/seraph laid out BEFORE Application.initialize
   so ProgramManager.initialize registers it installed - upstream-faithful (upstream
   seeds nothing; CLI installs).
-- C12 route taken (wire vs direct): wire.
-
-## Run 3 evidence (collapsed at close)
-- C11 [x] tests/hub-seed.test.ts case 1: seeded program registered installed (name/client/clientPath+index.html verified) - 255/255 verify rerun by parent
-- C12 [x] same file case 2: WIRE launch /auth/program/create-process -> process with clientEndpoint !== null (no fallback needed, start stayed private)
-- C13 [x] assistant routes remain space-scoped on AuthManager (untouched this run; seraph-chat.tsx consumers pass verify)
-- C14 [x] same file case 3: reopening same home keeps program.json bytes identical
-- C15 [x] same file cases 4-5: per-space seed paths distinct; corrupted seed never fails a space open; hub.test.ts untouched
+- C12 route taken (wire vs direct): wire.
+
+
+
+## Run 3 evidence (collapsed at close)
+
+- C11 [x] tests/hub-seed.test.ts case 1: seeded program registered installed (name/client/clientPath+index.html verified) - 255/255 verify rerun by parent
+
+- C12 [x] same file case 2: WIRE launch /auth/program/create-process -> process with clientEndpoint !== null (no fallback needed, start stayed private)
+
+- C13 [x] assistant routes remain space-scoped on AuthManager (untouched this run; seraph-chat.tsx consumers pass verify)
+
+- C14 [x] same file case 3: reopening same home keeps program.json bytes identical
+
+- C15 [x] same file cases 4-5: per-space seed paths distinct; corrupted seed never fails a space open; hub.test.ts untouched
+
+
+# Run 4 - Gateway per-session authentication (2026-10-06, in progress)
+
+principal_stated_goal: "continue" (build handoff item 4: bind gateway peers to an explicit admin token before multi-tenant hosts)
+
+## Design (decided from code reads + upstream SDK inspection)
+- Upstream SDK contract inspected live (node_modules/@phreshos/node): GatewayConnection.open waits for '/gateway/ready' as the server's FIRST frame and sends NO credentials. But this fork declares NO @phreshos/server/node deps (package.json verified) - the pinned SDK does not bind here - and the gateway pipe name is namespaced seraphos-* so the upstream CLI talks to upstream installs, not this fork. The handshake is therefore fork-ownable.
+- New contract: a peer's FIRST inbound envelope must be '/gateway/authenticate' {token}. The server resolves hub.spaceForToken(token) (session index -> space) AND requires the space's account to be a live ADMIN (accounts.find(username): role admin, not disabled) before binding. Only then: addExternalConnection, then the same '/gateway/ready' payload as before. Any other first envelope, an unknown/expired/non-admin token, or a refused verify: the peer gets a plain refusal and the socket closes - nothing binds.
+- Tokens come from normal desktop sign-in (session index), so a gateway peer provably stands in an admin session that the admin can end from the desktop. adminSpace()-fallback-by-transport disappears.
+- The one gateway.test.ts asserts the no-auth contract for a MOCKED hub; it gets updated to the new handshake per the repo testing rules (adapt affected tests in place).
+
+## Claims (falsifiers pending build)
+- C16: A peer presenting a valid live ADMIN session token binds; ready arrives after the handshake; its RPC relays into its OWN space exactly as before. FALSIFIER: socket-level test with a real hub + real bootstrapped admin session.
+- C17: A peer with NO token, a token of a non-admin account, a disabled admin's token, or an expired/unknown token never binds: refusal + close, and neither addExternalConnection nor ready happened. FALSIFIER: socket-level tests, one per refusal class.
+- C18: The handshake is strict about order: an envelope before '/gateway/authenticate' is refused and closes; a late authenticate after bind is refused. FALSIFIER: order-abuse test.
+- C19: Sign-out from the desktop ends a bound gateway peer's authority (its space's sign-out path removes the session; the external boundary leaves with the connection teardown that transport isolation already provides OR at least a follow-up gateway op fails). FALSIFIER: test - bind, sign out the session, assert the peer's authority is gone.
+- C20: Nothing else changed: the ready payload shape, external-boundary semantics in link-manager, and every desktop flow are untouched. FALSIFIER: bounded diff + full verify green + hub/accounts/assistant suites unchanged-green.
+
+## Anti-claims
+- No new dependency on @phreshos/server or @phreshos/node; the SDK client shape is not modified.
+- No weakening of the loopback-only transport (Unix socket/0600/named pipe stays); per-session auth ADDS to transport isolation, never replaces it.
+- No change to the four pre-auth gate events or any browser flow.
+
+# Run 4 build notes (2026-10-06)
+- Handshake kept minimal: the token rides the link as the first envelope
+  (SocketClient.connect carries no auth payload); the ready shape, name, and
+  external-boundary semantics in link-manager are unchanged.
+- Wire mechanics learned (probed live, encoded in tests): publishFirst
+  aggregation iterates the LIVE forwarder set, so binding moved into the
+  handshake forwarder itself (one forwarder for the peer's life; a late
+  forwarder added during a running publish would see that same envelope).
+  Refusals answer the refused call directly (return [reason]) instead of a
+  server->client response publish: a server->client publish waits for the
+  client's resolve envelope, which cannot complete before the refused call's
+  own resolve - the close is deferred (1s) so the refusal always leaves first.
+- C19 realized honestly: a BOUND peer keeps transport authority until its
+  socket drops (external boundaries bypass the intercept); what sign-out
+  ends is the MINTING power - spaceForToken goes null and a new bind is
+  refused with 'must authenticate'.
+- Disabled-admin refusal needed a server-side re-read of the account at
+  handshake time: sessions may sit in the index for 24h after disable, but
+  hub accounts state decides, live.
+
+## Run 4 evidence (collapsed at close)
+- C16 [x] tests/gateway-auth.test.ts case 1: real hub + gate sign-up token binds; ready snapshot received; relay answers the space's state
+- C17 [x] case 2: four refusal classes answered (none/non-admin/disabled-admin/unknown)
+- C18 [x] case 3: out-of-order refused, second handshake still refused
+- C19 [x] case 4: sign-out then dead token refused for new binds
+- C20 [x] gateway.test.ts updated in place for the handshake; 259/259 verify on the parent's own run

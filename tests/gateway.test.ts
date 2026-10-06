@@ -14,6 +14,7 @@ test("gateway contract", async () => {
   const path = gatewayAddress(directory)
   const received: unknown[][] = []
   let removed = false
+  let boundExternal = false
   const snapshot = {
       linkManager: { appearance: { key: "appearance", value: {} } },
       authManager: {
@@ -22,8 +23,12 @@ test("gateway contract", async () => {
       }
   }
   const space = {
+      authentication: { username: "root" },
       linkManager: {
           addExternalConnection() {
+
+              boundExternal = true
+
               return {
                   async publish(event: string, ...values: unknown[]) {
                       received.push([event, ...values])
@@ -37,7 +42,8 @@ test("gateway contract", async () => {
       }
   } as unknown as Application
   const hub = {
-      async adminSpace() { return space }
+      async spaceForToken(token: string) { return token === "gateway-token" ? space : null },
+      accounts: { find(username: string) { return username === "root" ? { username: "root", role: "admin", disabled: false, createdAt: new Date() } : null } }
   } as unknown as Hub
   const listener = await gateway(hub, path)
   const client = new SocketClient(path)
@@ -50,6 +56,14 @@ test("gateway contract", async () => {
 
   try {
       await client.connect()
+
+      // The first envelope is the handshake: its answer carries the reason a
+      // refused peer would have seen, and nothing bound before it resolved.
+      const accepted = await client.$outbound.publishFirst("/gateway/authenticate", "gateway-token", "handshake-1")
+
+      assert.equal(accepted, undefined, "the handshake answered success before any other frame")
+
+      assert.equal(boundExternal, true, "a proven token bound its boundary")
 
       assert.deepEqual(await ready, snapshot)
       assert.deepEqual(
