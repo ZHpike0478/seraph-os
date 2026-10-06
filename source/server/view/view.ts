@@ -23,12 +23,22 @@ export default async function (config: Config) {
 
     const debugging = config.mode === "development"
 
-    cfonts.say(`${name} v${version}`, {
+    // A banner needs a terminal to draw on; a service, a pipe, or a runner
+    // has none, and must never fail the System for wanting one.
+    if (process.stdout?.isTTY) {
 
-        colors: ["blue", "white"],
+        try {
 
-        font: "simple"
-    })
+            cfonts.say(`${name} v${version}`, {
+
+                colors: ["blue", "white"],
+
+                font: "simple"
+            })
+        }
+
+        catch { }
+    }
 
     const icons: ApplicationIcons = { system: resolve("assets/logo.png"), defaultProgram: resolve("assets/default-icon.png") }
 

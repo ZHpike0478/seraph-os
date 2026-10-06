@@ -25,11 +25,11 @@ one user's data to another):
    (tests/accounts.test.ts, 7 tests)
 2. Sessions carry `user`; `Authentication.open` migrates the owner record into
    an admin account on first open; verify/sign-in resolve through Accounts
-3. Per-user process/window ownership + announcement filtering (ProcessManager
+3. DONE — isolation achieved structurally: one Application (space) per account under Hub; Gate door (ink) routes every browser socket; per-space storage, programs, processes, sessions. No cross-user path exists.
    is 3.7k lines; this is the big retrofit — every announce* gains a user scope)
-4. Per-user storage roots (`home/users/<user>/`), program ownership,
+4. DONE — spaces keep their own storage root (`home/users/<name>/`), System-storage native root inside the space, uploads per space; doors resolve the caller token to its space.
    appearance + uploads + desktop-file per user
-5. Sign-in cutover: `/owner/sign-in` resolves against Accounts; session ↔ user
+5. DONE — Gate handles owner state/sign-up/sign-in/session-authenticate; bootstrap admin on first visit; live wire probes passed (subscribe ack, anon state, sign-up+token push, second-connection sign-in, bound RPC). Client cutover verified over the real wire (messagepack ws).
    binding everywhere the Desktop reads state; bootstrap admin prompt on first
    Desktop visit; admin account management routes (`/accounts/*`, admin-only)
 6. Gateway authenticates as administrator
