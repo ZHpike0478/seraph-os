@@ -13,6 +13,7 @@ import uploads from "./http/uploads"
 import link from "./http/link"
 import cfonts from "cfonts"
 import { Hono } from "hono"
+import hardened from "./http/hardened"
 import { resolve } from "node:path"
 import { writeFile } from "node:fs/promises"
 import { styleText } from "node:util"
@@ -46,8 +47,10 @@ export default async function (config: Config) {
 
     // One server, five doors, each at its own name. The link door is the
     // multi-user gate; the other doors resolve the caller's token to its own
-    // account-space before answering.
+    // account-space before answering. Every door answers inside one wall.
     const server = new Hono()
+
+    server.use("*", hardened())
 
     server.route(doors.link, link(hub, debugging))
 
