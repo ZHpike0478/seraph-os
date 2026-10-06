@@ -66,7 +66,7 @@ export default class Application {
         this.system = new System(this)
     }
 
-    public static async initialize(homePath: string, icons: ApplicationIcons) {
+    public static async initialize(homePath: string, icons: ApplicationIcons, authentication?: Authentication) {
 
         const storage = new FileManager(homePath)
 
@@ -74,7 +74,7 @@ export default class Application {
 
         const store = openStore(storage.path)
 
-        const authentication = await Authentication.open(storage.join("credentials.json"), store)
+        authentication ??= await Authentication.open(storage.join("credentials.json"), store)
 
         const uploads = new UploadManager(storage.navigateTo("uploads"))
 

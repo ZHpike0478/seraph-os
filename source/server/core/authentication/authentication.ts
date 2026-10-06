@@ -1,6 +1,7 @@
 import { readFile, rename, rm, writeFile } from "node:fs/promises"
 import { randomBytes, randomUUID, scrypt as derive, timingSafeEqual } from "node:crypto"
 import { parseAuthenticationCredentials, type AuthenticationRequirements } from "@phreshos/core"
+import type Accounts from "../accounts"
 import Sessions from "./sessions"
 import Keyv from "keyv"
 
@@ -32,24 +33,33 @@ const requirements: AuthenticationRequirements = Object.freeze({
     })
 })
 
-/** Persistent credentials for the sole owner of one installation. */
+/** Persistent credentials for one Seraph OS account-space. */
 export default class Authentication {
 
     private owner: Owner | null
 
-    private readonly path: string
+    private readonly path: string | null
 
     private readonly sessions: Sessions
 
+    /**
+     * When this space's credentials live in the global account store:
+     * sign-up and credential changes are refused, and verify delegates
+     * to that store. Null means credentials are local (single-space mode).
+     */
+    private readonly delegated: Accounts | null
+
     private changingCredentials: Promise<void> = Promise.resolve()
 
-    private constructor(path: string, owner: Owner | null, sessions: Sessions) {
+    private constructor(path: string | null, owner: Owner | null, sessions: Sessions, delegated: Accounts | null = null) {
 
         this.path = path
 
         this.owner = owner
 
         this.sessions = sessions
+
+        this.delegated = delegated
     }
 
     public static async open(path: string, store: Keyv) {
@@ -67,6 +77,40 @@ export default class Authentication {
 
             throw exception
         }
+    }
+
+    /**
+     * Opens Authentication for one account-space whose credentials live in the
+     * global account store. The credential file is never written here.
+     */
+    public static async openDelegated(username: string, accounts: Accounts, store: Keyv) {
+
+        const sessions = await Sessions.open(store)
+
+        return new Authentication(null, {
+
+            version: 1,
+
+            username,
+
+            password: {
+
+                algorithm: "scrypt",
+
+                salt: "",
+
+                hash: "",
+
+                cost: parameters.cost,
+
+                blockSize: parameters.blockSize,
+
+                parallelization: parameters.parallelization,
+
+                keyLength: parameters.keyLength
+            }
+
+        }, sessions, accounts)
     }
 
     public get username(): string | null {
@@ -92,6 +136,8 @@ export default class Authentication {
     /** Replaces only the credential record; Session authority is independent. */
     public setCredentials(value: unknown) {
 
+        if (this.delegated) throw new Error("Credentials in delegated mode are managed by administrators")
+
         const credentials = parseAuthenticationCredentials(value)
 
         return this.changeCredentials(async () => {
@@ -112,6 +158,9 @@ export default class Authentication {
 
     public async signUp(username: string, password: string): Promise<SignUpResult> {
 
+        // In delegated mode, accounts belong to administrators.
+        if (this.delegated) return { error: "signed-up" }
+
         return this.changeCredentials(() => this.signUpNow(username, password))
     }
 
@@ -126,6 +175,8 @@ export default class Authentication {
         if (invalid) return { error: invalid }
 
         const owner = await createOwner(normalizedUsername, password)
+
+        if (!this.path) return { error: "signed-up" }
 
         try {
 
@@ -142,7 +193,7 @@ export default class Authentication {
 
             // Another sign-up won the exclusive write. Load that owner
             // before reporting the closed state so this instance cannot reopen it.
-            this.owner = parse(await readFile(this.path, "utf8"))
+            if (this.path) this.owner = parse(await readFile(this.path, "utf8"))
 
             return { error: "signed-up" }
         }
@@ -158,6 +209,8 @@ export default class Authentication {
     }
 
     private async replaceOwner(owner: Owner) {
+
+        if (!this.path) throw new Error("This System holds credentials in the account store")
 
         const temporary = `${this.path}.${randomUUID()}.changing`
 
@@ -177,6 +230,15 @@ export default class Authentication {
     }
 
     public async verify(username: string, password: string) {
+
+        if (this.delegated) {
+
+            // The account store decides; the username argument must match the
+            // space this Authentication serves, and the account must be live.
+            const found = await this.delegated.verify(username, password)
+
+            return found !== null && found.username === this.owner?.username
+        }
 
         if (!this.owner) return false
 
