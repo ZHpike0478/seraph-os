@@ -90,3 +90,16 @@ installable Program with its own desktop window reachable from the Start menu)
 - The chat window stays a Desktop-native view (no iframe, no client half).
 - No new permissions asked at launch (assistant runs through the existing
   AuthManager routes).
+
+## Run 3 build notes (2026-10-06)
+- Seed point chosen: homePath/programs/seraph laid out BEFORE Application.initialize
+  so ProgramManager.initialize registers it installed - upstream-faithful (upstream
+  seeds nothing; CLI installs).
+- C12 route taken (wire vs direct): wire.
+
+## Run 3 evidence (collapsed at close)
+- C11 [x] tests/hub-seed.test.ts case 1: seeded program registered installed (name/client/clientPath+index.html verified) - 255/255 verify rerun by parent
+- C12 [x] same file case 2: WIRE launch /auth/program/create-process -> process with clientEndpoint !== null (no fallback needed, start stayed private)
+- C13 [x] assistant routes remain space-scoped on AuthManager (untouched this run; seraph-chat.tsx consumers pass verify)
+- C14 [x] same file case 3: reopening same home keeps program.json bytes identical
+- C15 [x] same file cases 4-5: per-space seed paths distinct; corrupted seed never fails a space open; hub.test.ts untouched

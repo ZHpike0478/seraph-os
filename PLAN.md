@@ -52,7 +52,7 @@ Design decisions (confirmed by the owner):
 
 ## Phase 3 — Seraph assistant
 
-- Built-in chat Program (client) + assistant service (server side), streaming
+- Built-in chat Program (client) + assistant service (server side), streaming - DONE
 - OpenAI-compatible endpoint: SERAPH_LLM_BASE_URL / SERAPH_LLM_API_KEY /
   SERAPH_LLM_MODEL
 - Tool-calling as the user, least privilege: open/close programs, read/write

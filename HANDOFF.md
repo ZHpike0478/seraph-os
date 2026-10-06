@@ -158,18 +158,12 @@ after any port-range rename (a bad rename once produced a "valid" range).
    protection. PLAN.md Phase 2 item 5 ticked.
 2. **Assistant write confirmation** — `files_write` and `desktop_set_theme`
    act immediately; the confirmed design (dialog per write) is in PLAN.md.
-3. IN PROGRESS (design complete 2026-10-06; build next) - Assistant as Program - the chat window works, but `seraph` is not yet
-   an installable Program with its own Server Endpoint; it is a Desktop-built
-   view over AuthManager routes. Moving it under the Program model makes it
-   openable from the Start menu like anything else.
-   Design decided (Run 3 claims in `ISA.md`): seed a per-space runtime Program
-   (identity `seraph`) at space-open in `Hub.openSpace`, create-only-if-missing.
-   It declares the running server's own directory as its server half plus a
-   minimal client half - the Desktop only renders processes with a client
-   endpoint, and `process-window.tsx` renders SeraphChat natively for this
-   program, so no iframe is ever fetched. Upstream ships no built-in programs
-   (the CLI installs them; the Desktop falls back), so this seeding is
-   fork-local behavior, not an upstream-parity gap.
+3. DONE (2026-10-06) — Assistant as Program: Hub seeds a per-space seraph
+   Program (create-only-if-missing, upgrade-safe) making the native
+   SeraphChat window launchable from the Start menu like any Program;
+   assistant routes stay space-scoped. Wire tests cover seeding, client-
+   endpoint launch, restart stability, per-space isolation, and corrupted-
+   seed tolerance.
 
 4. **Gateway authenticates per session** — the loopback socket currently
    trusts transport-level isolation (same as upstream's owner model); bind

@@ -5,6 +5,7 @@ import Application, { type ApplicationIcons } from "./application"
 import Accounts, { type AccountSnapshot } from "./accounts"
 import Authentication from "./authentication/authentication"
 import openStore from "./open-store"
+import seedPrograms from "./hub-seed-programs"
 
 /**
  * The multi-user registry above account-spaces.
@@ -107,6 +108,12 @@ export default class Hub {
     private async openSpace(username: string): Promise<Application> {
 
         const homePath = join(this.home, "users", username)
+
+        // Upstream seeds nothing (the CLI installs programs); this fork
+        // seeds one fork-owned Program so the assistant launches from the
+        // Start menu for every account. Create-only-if-missing preserves
+        // user edits and restart state.
+        seedPrograms(homePath)
 
         const store = openStore(join(homePath, "storage"))
 
