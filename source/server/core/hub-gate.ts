@@ -3,6 +3,9 @@ import Application from "./application"
 import Hub from "./hub"
 import { TheLink } from "@the-link/core"
 
+/** The appearance property key every gate connection subscribes to while anonymous. */
+export const gateAppearanceKey = "seraphos.gate.appearance"
+
 /**
  * The front door of a multi-user System.
  *
@@ -11,30 +14,46 @@ import { TheLink } from "@the-link/core"
  * proves itself it is bound to that account's own Application — its own
  * sessions, programs, storage, and announcements. From then on the gate is
  * only a relay; nothing of one space crosses another.
+ *
+ * Replies and pushes leave on the gate's own outbound tunnel; the transport
+ * door forwards them onto the wire. The bridge link is what the account-space
+ * sees as the connection, so the space's own appearance key is rewritten to
+ * the anonymous acknowledgement's key in exactly one place.
  */
 export default class Gate extends TheLink {
 
     private readonly hub: Hub
 
-    private readonly socket: TheLink
+    private readonly bridge: TheLink
 
     private space: Application | null = null
 
     private boundary: ReturnType<Application["linkManager"]["addConnection"]> | null = null
 
-    private constructor(hub: Hub, socket: TheLink) {
+    private constructor(hub: Hub) {
 
         super()
 
         this.hub = hub
 
-        this.socket = socket
+        // The account-space publishes its pushes onto this bridge; the gate
+        // renames its appearance property and re-publishes on its own outbound.
+        this.bridge = new TheLink()
+
+        this.bridge.$outbound.forwardTo((event, ...values: unknown[]) => {
+
+            const name = typeof event === "string" && event.startsWith("property-update:")
+                ? `property-update:${gateAppearanceKey}`
+                : event
+
+            return this.$outbound.publish(name, ...values)
+        })
     }
 
     /** Registers one browser socket as an unbound gate connection. */
-    public static open(hub: Hub, socket: TheLink) {
+    public static open(hub: Hub) {
 
-        return new Gate(hub, socket)
+        return new Gate(hub)
     }
 
     public get bound(): boolean {
@@ -51,14 +70,11 @@ export default class Gate extends TheLink {
 
         return {
 
-            appearance: { key: "seraphos.gate.appearance", value: null }
+            appearance: { key: gateAppearanceKey, value: null }
         }
     }
 
-    /** The appearance key this gate answers appearance updates under. */
-    private static readonly appearanceKey = "seraphos.gate.appearance"
-
-    /** Forwards one client envelope; unbound gates may ask only four things. */
+    /** Forwards one client envelope; an unbound gate may ask only four things. */
     public receive(event: string, responseUuid: string | null, ...values: unknown[]) {
 
         if (this.space) return this.relay(event, responseUuid, values)
@@ -85,14 +101,29 @@ export default class Gate extends TheLink {
 
     private async relay(event: string, responseUuid: string | null, values: unknown[]) {
 
+        const space = this.space!
+
+        const boundary = this.boundary!
+
         if (responseUuid === null) {
 
-            await this.space!.linkManager.receive(this.boundary!, event, ...values).catch(() => undefined)
+            try { await space.linkManager.receive(boundary, event, ...values) }
+            catch { }
 
             return
         }
 
-        await this.envelope(responseUuid, async () => await this.space!.linkManager.receive(this.boundary!, event, ...values))
+        try {
+
+            const results = await space.linkManager.receive(boundary, event, ...values)
+
+            await this.$outbound.publish(responseUuid, succeeded(results))
+        }
+
+        catch (exception) {
+
+            await this.$outbound.publish(responseUuid, failed(exception, false))
+        }
     }
 
     private hubState() {
@@ -160,11 +191,10 @@ export default class Gate extends TheLink {
     }
 
     /**
-     * Binds this connection into one account-space exactly once: a boundary is
-     * created there, its pushed events flow through this gate (appearance
-     * updates re-named to the key the client subscribed to), and when asked a
-     * Session is created, its raw token recorded in the Hub index, and its
-     * arrival delivered to the socket by that space.
+     * Binds this connection into one account-space exactly once: the bridge
+     * becomes the space's boundary link, and when asked a Session is created,
+     * its raw token recorded in the Hub index, and its arrival delivered to
+     * the socket through the gate.
      */
     private async enter(username: string, createSession: boolean) {
 
@@ -172,27 +202,21 @@ export default class Gate extends TheLink {
 
         const space = await this.hub.space(username)
 
-        // The space publishes its own pushed events into the gate; the gate
-        // forwards them onto the socket, renaming the space's random appearance
-        // property key to the one the anonymous acknowledgement promised.
-        const boundary = space.linkManager.addConnection(this)
-
-        const stopForwarding = this.$outbound.forwardTo((event, ...values: unknown[]) => {
-
-            const name = typeof event === "string" && event.startsWith("property-update:")
-                ? `property-update:${Gate.appearanceKey}`
-                : event
-
-            return this.socket.$outbound.publish(name, ...values)
-        })
+        const boundary = space.linkManager.addConnection(this.bridge)
 
         this.space = space
 
         this.boundary = boundary
 
+        // The space marks its fresh boundary visible the way the original
+        // flow's first anonymous session-authenticate did, so its own sign-in
+        // path accepts the connection this gate carries.
+        try { await space.linkManager.receive(boundary, "/session-authenticate", null) }
+        catch { /* an anonymous authenticate always succeeds; never block bind */ }
+
         // The space's current appearance, so the desktop paints it before the
         // first change rather than after.
-        await this.socket.$outbound.publish(`property-update:${Gate.appearanceKey}`, space.appearanceManager.value)
+        await this.$outbound.publish(`property-update:${gateAppearanceKey}`, space.appearanceManager.value)
 
         if (!createSession) return space
 
@@ -203,8 +227,6 @@ export default class Gate extends TheLink {
         try {
 
             await space.linkManager.signInConnection(boundary)
-
-            void stopForwarding
 
             return space
         }
@@ -230,12 +252,12 @@ export default class Gate extends TheLink {
 
             const results = await operation()
 
-            await this.socket.$outbound.publish(responseUuid, succeeded(results))
+            await this.$outbound.publish(responseUuid, succeeded(results))
         }
 
         catch (exception) {
 
-            await this.socket.$outbound.publish(responseUuid, failed(exception, false))
+            await this.$outbound.publish(responseUuid, failed(exception, false))
         }
     }
 }

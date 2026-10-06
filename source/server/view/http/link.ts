@@ -26,7 +26,7 @@ export default function (hub: Hub, debugging: boolean) {
 
     http.onSubscribe(function (socketLink) {
 
-        const gate = Gate.open(hub, socketLink)
+        const gate = Gate.open(hub)
 
         const stopForwarding = socketLink.$inbound.forwardTo(function (event, responseUuid: string | null, ...values: unknown[]) {
 
@@ -40,6 +40,12 @@ export default function (hub: Hub, debugging: boolean) {
             stopForwarding()
 
             await gate.close()
+        })
+
+        // Gate replies and pushes ride the gate's own outbound onto the wire.
+        gate.$outbound.forwardTo(async function (event, ...values: unknown[]) {
+
+            await socketLink.$outbound.publish(event, ...values)
         })
 
         return gate.acknowledgement()
