@@ -1,8 +1,8 @@
 import type { Transaction } from "@phreshos/core"
 import { cssEasing } from "@phreshos/core"
 
-const durationProperty = "--phreshos-theme-transition-duration"
-const easingProperty = "--phreshos-theme-transition-easing"
+const durationProperty = "--seraphos-theme-transition-duration"
+const easingProperty = "--seraphos-theme-transition-easing"
 
 type NativeViewTransition = Readonly<{
     ready: Promise<unknown>
@@ -43,7 +43,7 @@ export function transitionTheme(
     }
 
     const root = document.documentElement
-    root.dataset.phreshosThemeTransition = ""
+    root.dataset.seraphosThemeTransition = ""
     root.style.setProperty(durationProperty, `${transaction.duration}ms`)
     root.style.setProperty(easingProperty, cssEasing(transaction.easing))
 
@@ -53,7 +53,7 @@ export function transitionTheme(
         view = target.startViewTransition(async () => {
             if (revisions.get(document) !== revision) return
 
-            root.dataset.phreshosThemeCapture = ""
+            root.dataset.seraphosThemeCapture = ""
             await update()
         })
     }
@@ -85,8 +85,8 @@ function settle(promise: Promise<unknown>, complete: () => void) {
 function clearTransition(document: Document) {
     const root = document.documentElement
 
-    delete root.dataset.phreshosThemeCapture
-    delete root.dataset.phreshosThemeTransition
+    delete root.dataset.seraphosThemeCapture
+    delete root.dataset.seraphosThemeTransition
     root.style.removeProperty(durationProperty)
     root.style.removeProperty(easingProperty)
 }

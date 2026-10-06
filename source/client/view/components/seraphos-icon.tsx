@@ -1,10 +1,10 @@
 import { type SVGProps } from "react"
 
 /**
- * The PhreshOS mark as a single-color icon. It paints in `currentColor`, so it
+ * The Seraph OS mark as a single-color icon. It paints in `currentColor`, so it
  * follows the text color of wherever it is placed.
  */
-export default function PhreshOSIcon(props: SVGProps<SVGSVGElement>) {
+export default function SeraphOSIcon(props: SVGProps<SVGSVGElement>) {
 
     return <svg viewBox="126.5 97 1059 1059" fill="currentColor" aria-hidden="true" {...props}>
 

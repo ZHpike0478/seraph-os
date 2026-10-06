@@ -9,5 +9,5 @@ export default function gatewayAddress(home: string, platform = process.platform
     const owner = home.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase()
     const identity = createHash("sha256").update(owner).digest("hex").slice(0, 32)
 
-    return `\\\\.\\pipe\\phreshos-${identity}-gateway`
+    return `\\\\.\\pipe\\seraphos-${identity}-gateway`
 }

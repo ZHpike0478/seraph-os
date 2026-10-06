@@ -14,7 +14,7 @@ import type { ProgramConfig } from "@server/core/link-manager/auth-manager/progr
 import { test } from "vitest"
 
 test("server runtime contract", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "phresh-worker-runtime-"))
+  const directory = await mkdtemp(join(tmpdir(), "seraph-worker-runtime-"))
   const entry = join(directory, "server.mjs")
   const dependency = join(directory, "dependency.mjs")
   const bareEntry = join(directory, "bare.mjs")
@@ -22,7 +22,7 @@ test("server runtime contract", async () => {
   const failedEntry = join(directory, "failed.mjs")
   const timerEntry = join(directory, "timer.mjs")
   const asyncTimerEntry = join(directory, "async-timer.mjs")
-  const outsideDirectory = await mkdtemp(join(tmpdir(), "phresh-sandbox-outside-"))
+  const outsideDirectory = await mkdtemp(join(tmpdir(), "seraph-sandbox-outside-"))
   const outsideModule = join(outsideDirectory, "outside.mjs")
   const linkedModule = join(directory, "linked.mjs")
   const commandEntry = join(directory, "command.mjs")

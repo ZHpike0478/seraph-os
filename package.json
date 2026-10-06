@@ -1,24 +1,19 @@
 {
-  "name": "phreshos",
-  "version": "0.1.117",
-  "description": "The PhreshOS server, desktop, and authoritative system runtime.",
+  "name": "seraphos",
+  "version": "0.2.0",
+  "description": "The Seraph OS server, desktop, and authoritative system runtime. Forked from PhreshOS (MIT).",
   "type": "module",
   "private": true,
   "engines": {
     "node": ">=24.15.0"
   },
-  "author": "Zohayr SLILEH",
+  "author": "steph",
+  "contributors": [
+    "Zohayr SLILEH (original PhreshOS author)"
+  ],
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/PhreshOS/system.git"
-  },
-  "bugs": {
-    "url": "https://github.com/PhreshOS/system/issues"
-  },
-  "homepage": "https://github.com/PhreshOS/system#readme",
   "keywords": [
-    "phreshos",
+    "seraphos",
     "operating-system",
     "web-desktop"
   ],

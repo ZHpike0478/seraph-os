@@ -218,7 +218,7 @@ export default function Workspace() {
         return programIcon(application.doors.program, assetOf(record.program))
     }
 
-    // A Program can leave while one of its Windows is still leaving, as when `phresh start` ends and its
+    // A Program can leave while one of its Windows is still leaving, as when `seraph start` ends and its
     // attached Program is forgotten at once. The leaving Window keeps what it showed.
     const knownAssets = useRef(new Map<string, string>())
 

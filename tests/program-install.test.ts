@@ -8,7 +8,7 @@ import type { ProgramCommandChunk } from "@phreshos/core"
 import { test } from "vitest"
 
 test("program install contract", async () => {
-  const temporary = mkdtempSync(join(tmpdir(), "phresh-program-install-"))
+  const temporary = mkdtempSync(join(tmpdir(), "seraph-program-install-"))
   const source = join(temporary, "source")
   const installed = join(temporary, "installed")
 

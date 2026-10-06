@@ -336,7 +336,7 @@ test("Reading the Desktop view is open, and moving it requires desktopViewport",
 })
 
 test("a Client reads what the System is from the System itself, when it started included", async () => {
-    const about = Object.freeze({ name: "PhreshOS", version: "1.0.0", release: { name: "Sprout", program: "sprout" }, startedAt: new Date("2026-09-30T08:00:00.000Z") })
+    const about = Object.freeze({ name: "Seraph OS", version: "1.0.0", release: { name: "Sprout", program: "sprout" }, startedAt: new Date("2026-09-30T08:00:00.000Z") })
     const auth = { about: vi.fn(async () => about) } as unknown as AuthManager
     const answer = host(auth, "caller", { state: () => { throw new Error("unused viewport") }, move: () => { throw new Error("unused viewport") } }, {} as never, () => null, clientFrame(), {} as never)
 

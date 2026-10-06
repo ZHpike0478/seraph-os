@@ -6,7 +6,7 @@ import shell from "@server/core/shell"
 import { test } from "vitest"
 
 test("shell contract", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "phresh-shell-"))
+  const directory = await mkdtemp(join(tmpdir(), "seraph-shell-"))
   const executable = `"${process.execPath}"`
   const outputEntry = join(directory, "output.mjs")
   const runningEntry = join(directory, "running.mjs")

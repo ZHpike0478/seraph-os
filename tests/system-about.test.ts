@@ -7,7 +7,7 @@ import Application from "@server/core/application"
 import { name, release, version } from "@/source/identity"
 
 test("the System says what it is from its identity, and when it started", async () => {
-    const home = await mkdtemp(join(tmpdir(), "phreshos-about-"))
+    const home = await mkdtemp(join(tmpdir(), "seraphos-about-"))
     const before = Date.now()
     const application = await Application.initialize(home, { system: join(home, "logo.png"), defaultProgram: join(home, "icon.png") })
     try {

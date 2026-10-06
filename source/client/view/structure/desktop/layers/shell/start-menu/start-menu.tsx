@@ -1,4 +1,4 @@
-import PhreshOSIcon from "@client/view/components/phreshos-icon"
+import SeraphOSIcon from "@client/view/components/seraphos-icon"
 import { createContext, memo, useCallback, useContext, useEffect, useId, useRef, useState, type CSSProperties, type PropsWithChildren, type RefObject } from "react"
 import StartMenuPanel from "./start-menu-panel"
 import { name } from "@/source/identity"
@@ -88,7 +88,7 @@ export const StartMenuButton = memo(function StartMenuButton({ showLabel = true 
     const control = useStartMenuControl()
 
     return <TaskbarButton
-        icon={<PhreshOSIcon className="block size-full" />}
+        icon={<SeraphOSIcon className="block size-full" />}
         label={name}
         showLabel={showLabel}
         color="default:base"

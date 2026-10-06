@@ -75,7 +75,7 @@ describe("Session persistence and connection-bound lifetime", () => {
 })
 
 async function fixture() {
-    const directory = await mkdtemp(join(tmpdir(), "phreshos-sessions-"))
+    const directory = await mkdtemp(join(tmpdir(), "seraphos-sessions-"))
     directories.push(directory)
     const store = new Keyv(new SqliteStore(join(directory, "store.sqlite")))
     return { sessions: await Sessions.open(store), store }

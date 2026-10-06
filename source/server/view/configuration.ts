@@ -13,13 +13,13 @@ export function portRange(from: number, to: number) {
 /** Select the default state root for the current runtime environment. */
 export function defaultHome(development: boolean) {
 
-    return development ? resolve("storage") : resolve(homedir(), ".phreshos")
+    return development ? resolve("storage") : resolve(homedir(), ".seraphos")
 }
 
 /** Select the default public ports for the current runtime environment. */
 export function defaultPorts(development: boolean) {
 
-    return development ? portRange(5300, 5399) : portRange(4300, 4399)
+    return development ? portRange(6300, 6399) : portRange(6400, 6499)
 }
 
 /** Select the default interface exposed by the System listener. */
@@ -102,7 +102,7 @@ export async function requestedPorts(arguments_: string[]) {
 
     await rm(path, { force: true })
 
-    return parsePorts(value, "The requested PhreshOS port selection")
+    return parsePorts(value, "The requested Seraph OS port selection")
 }
 
 /** Bind one server to the first available candidate or an assigned port. */
@@ -141,7 +141,7 @@ export async function requestedHome(arguments_: string[]) {
 
     await rm(path, { force: true })
 
-    if (!isAbsolute(value)) throw new Error("The requested PhreshOS home must be an absolute filesystem path")
+    if (!isAbsolute(value)) throw new Error("The requested Seraph OS home must be an absolute filesystem path")
 
     return normalize(value)
 }

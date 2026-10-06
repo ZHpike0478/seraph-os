@@ -10,7 +10,7 @@ import Program from "@server/core/link-manager/auth-manager/program-manager/prog
 import ProgramManager from "@server/core/link-manager/auth-manager/program-manager/program-manager"
 
 function fixture(context: TestContext) {
-    const directory = mkdtempSync(join(tmpdir(), "phresh-install-lifecycle-"))
+    const directory = mkdtempSync(join(tmpdir(), "seraph-install-lifecycle-"))
     context.onTestFinished(() => { vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }) })
     const server = join(directory, "source", "server")
     mkdirSync(server, { recursive: true })

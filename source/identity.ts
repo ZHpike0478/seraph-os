@@ -1,7 +1,7 @@
 import { version } from "@/package.json"
 
-/** How PhreshOS names itself to people. */
-export const name = "PhreshOS"
+/** How Seraph OS names itself to people. */
+export const name = "Seraph OS"
 
 /** The version, as package.json holds it: a release bumps it there, and nowhere else. */
 export { version }

@@ -28,14 +28,14 @@ test("theme transitions capture one complete old and new document state", async 
     })
 
     assert.equal(changes, 0)
-    assert.equal(document.documentElement.dataset.phreshosThemeTransition, "")
-    assert.equal(document.documentElement.style.values.get("--phreshos-theme-transition-duration"), "180ms")
-    assert.equal(document.documentElement.style.values.get("--phreshos-theme-transition-easing"), "cubic-bezier(0.2, 0.4, 0.6, 0.8)")
+    assert.equal(document.documentElement.dataset.seraphosThemeTransition, "")
+    assert.equal(document.documentElement.style.values.get("--seraphos-theme-transition-duration"), "180ms")
+    assert.equal(document.documentElement.style.values.get("--seraphos-theme-transition-easing"), "cubic-bezier(0.2, 0.4, 0.6, 0.8)")
 
     const updated = update!()
 
     assert.equal(changes, 1)
-    assert.equal(document.documentElement.dataset.phreshosThemeCapture, "")
+    assert.equal(document.documentElement.dataset.seraphosThemeCapture, "")
 
     commit.resolve()
     await updated
@@ -45,15 +45,15 @@ test("theme transitions capture one complete old and new document state", async 
     await Promise.resolve()
 
     // The new view stays live while it animates, so changes stay instant until it finishes.
-    assert.equal(document.documentElement.dataset.phreshosThemeCapture, "")
-    assert.equal(document.documentElement.dataset.phreshosThemeTransition, "")
+    assert.equal(document.documentElement.dataset.seraphosThemeCapture, "")
+    assert.equal(document.documentElement.dataset.seraphosThemeTransition, "")
 
     finished.resolve()
     await complete
     await Promise.resolve()
 
-    assert.equal(document.documentElement.dataset.phreshosThemeCapture, undefined)
-    assert.equal(document.documentElement.dataset.phreshosThemeTransition, undefined)
+    assert.equal(document.documentElement.dataset.seraphosThemeCapture, undefined)
+    assert.equal(document.documentElement.dataset.seraphosThemeTransition, undefined)
     assert.equal(document.documentElement.style.values.size, 0)
 })
 

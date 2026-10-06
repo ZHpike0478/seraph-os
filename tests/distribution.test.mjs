@@ -114,8 +114,8 @@ test("distribution contract", async () => {
       cwd: directory,
       env: {
         ...process.env,
-        PHRESHOS_HOME: join(temporary, "home"),
-        PHRESHOS_HOST: "0.0.0.0",
+        SERAPHOS_HOME: join(temporary, "home"),
+        SERAPHOS_HOST: "0.0.0.0",
         [portVariable]: String(port)
       },
       stdio: ["ignore", "pipe", "pipe"]

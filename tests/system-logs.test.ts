@@ -8,7 +8,7 @@ import ProgramLogs from "@server/core/link-manager/auth-manager/program-manager/
 import { test } from "vitest"
 
 test("System logs become observable only after they are durable", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "phresh-system-logs-"))
+  const directory = mkdtempSync(join(tmpdir(), "seraph-system-logs-"))
   const logs = new SystemLogs(join(directory, "logs.sqlite"))
   const received: SystemLogRecord[] = []
 
@@ -53,7 +53,7 @@ test("System logs become observable only after they are durable", async () => {
 })
 
 test("subscribing does not replay stored System logs", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "phresh-system-logs-future-"))
+  const directory = mkdtempSync(join(tmpdir(), "seraph-system-logs-future-"))
   const logs = new SystemLogs(join(directory, "logs.sqlite"))
 
   try {
@@ -77,7 +77,7 @@ test("subscribing does not replay stored System logs", async () => {
 })
 
 test("Program log listeners receive the record after its row is stored", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "phresh-program-logs-live-"))
+  const directory = mkdtempSync(join(tmpdir(), "seraph-program-logs-live-"))
   const received: { record: unknown, rows: unknown[] }[] = []
   let logs!: ProgramLogs
 

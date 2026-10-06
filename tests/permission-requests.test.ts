@@ -13,7 +13,7 @@ import PermissionManager from "@server/core/permission-manager"
 import { test } from "vitest"
 
 test("permission request lifecycle belongs to one live Endpoint", async () => {
-    const temporary = mkdtempSync(join(tmpdir(), "phresh-permission-requests-"))
+    const temporary = mkdtempSync(join(tmpdir(), "seraph-permission-requests-"))
 
     try {
         const program = new Program({ identity: "example", storage: temporary, client: { location: "." } })
@@ -94,7 +94,7 @@ test("permission request lifecycle belongs to one live Endpoint", async () => {
 }, 120_000)
 
 test("an exact effective assignment creates no pending request", async () => {
-    const temporary = mkdtempSync(join(tmpdir(), "phresh-permission-exact-"))
+    const temporary = mkdtempSync(join(tmpdir(), "seraph-permission-exact-"))
 
     try {
         const program = new Program({ identity: "example", storage: temporary, client: { location: "." } })

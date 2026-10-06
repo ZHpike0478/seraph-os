@@ -1,6 +1,6 @@
 # Contributing
 
-This repository is the PhreshOS System: the service that runs Programs, their
+This repository is the Seraph OS System: the service that runs Programs, their
 Processes and Endpoints, authentication, permissions, storage, and the Desktop
 that shows them.
 
@@ -14,7 +14,7 @@ bun run dev
 ```
 
 `dev` keeps its data in `storage/`, which is never committed, and serves the
-Desktop on the first free port from `5300`.
+Desktop on the first free port from `6300`.
 
 ## Before a pull request
 
@@ -30,7 +30,7 @@ Windows.
 
 ## Rules
 
-- Use other PhreshOS packages only through their published releases. Do not
+- Use other Seraph OS packages only through their published releases. Do not
   add workspace ranges, paths to sibling folders, source aliases into another
   checkout, Git submodules, or assumptions about an enclosing folder.
 - Keep runtime state out of version control. Tests and development runs use
@@ -42,5 +42,5 @@ Windows.
 
 Keep each pull request to one change. Explain what it changes in the System
 and why, add tests for new behavior, and update the
-[documentation](https://github.com/PhreshOS/website) when a public behavior
+[documentation](https://github.com/Seraph OS/website) when a public behavior
 changes.

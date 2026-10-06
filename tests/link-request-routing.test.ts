@@ -10,7 +10,7 @@ import { test } from "vitest"
 
 test("an RPC result returns only to its requesting boundary", async () => {
 
-    const home = await mkdtemp(join(tmpdir(), "phreshos-request-routing-"))
+    const home = await mkdtemp(join(tmpdir(), "seraphos-request-routing-"))
     const application = await Application.initialize(home, { system: join(home, "logo.png"), defaultProgram: join(home, "icon.png") })
     const link = new TheLink()
     const boundary = application.linkManager.addExternalConnection(link)

@@ -7,7 +7,7 @@ import AuthManager from "@server/core/link-manager/auth-manager/auth-manager"
 import { test } from "vitest"
 
 test("storage contract", async () => {
-  const fixture = mkdtempSync(join(tmpdir(), "phreshos-storage-"))
+  const fixture = mkdtempSync(join(tmpdir(), "seraphos-storage-"))
   const root = join(fixture, "configured")
   const outside = join(fixture, "outside")
 

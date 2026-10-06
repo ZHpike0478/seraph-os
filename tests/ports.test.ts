@@ -7,21 +7,21 @@ import { defaultHome, defaultPorts, environmentPorts, listenOnPorts, parsePorts,
 import { test } from "vitest"
 
 test("ports contract", async () => {
-  assert.equal(environmentPorts("phreshos", {}), undefined)
-  assert.deepEqual(environmentPorts("phreshos", { PHRESHOS_PORT: "4305" }), [4305])
+  assert.equal(environmentPorts("seraphos", {}), undefined)
+  assert.deepEqual(environmentPorts("seraphos", { SERAPHOS_PORT: "4305" }), [4305])
   assert.deepEqual(
-      environmentPorts("phreshos", { PHRESHOS_PORT: "4196,4234,5000-5002,4234" }),
+      environmentPorts("seraphos", { SERAPHOS_PORT: "4196,4234,5000-5002,4234" }),
       [4196, 4234, 5000, 5001, 5002]
   )
-  assert.deepEqual(portRange(4300, 4399), Array.from({ length: 100 }, (_, index) => 4300 + index))
-  assert.deepEqual(defaultPorts(false), portRange(4300, 4399))
-  assert.deepEqual(defaultPorts(true), portRange(5300, 5399))
-  assert.equal(defaultHome(false), resolve(homedir(), ".phreshos"))
+  assert.deepEqual(portRange(6400, 6499), Array.from({ length: 100 }, (_, index) => 6400 + index))
+  assert.deepEqual(defaultPorts(false), portRange(6400, 6499))
+  assert.deepEqual(defaultPorts(true), portRange(6300, 6399))
+  assert.equal(defaultHome(false), resolve(homedir(), ".seraphos"))
   assert.equal(defaultHome(true), resolve("storage"))
 
-  for (const value of ["", "0", "65536", "43.12", "port", "4300-", "4301-4300", "4300,,4301"]) {
+  for (const value of ["", "0", "65536", "43.12", "port", "6400-", "6401-6400", "6400,,6401"]) {
 
-      assert.throws(() => parsePorts(value, "PHRESHOS_PORT"), /PHRESHOS_PORT must contain ports or inclusive ranges/)
+      assert.throws(() => parsePorts(value, "SERAPHOS_PORT"), /SERAPHOS_PORT must contain ports or inclusive ranges/)
   }
 
   const occupied = createServer()
@@ -43,7 +43,7 @@ test("ports contract", async () => {
 
   await Promise.all([close(occupied), close(selected)])
 
-  const temporary = await mkdtemp(join(tmpdir(), "phreshos-port-request-"))
+  const temporary = await mkdtemp(join(tmpdir(), "seraphos-port-request-"))
   const request = join(temporary, "next-port")
 
   try {

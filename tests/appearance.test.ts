@@ -32,7 +32,7 @@ test("appearance contract", async () => {
   }))
 
   const store = new Keyv()
-  const directory = await mkdtemp(join(tmpdir(), "phresh-appearance-"))
+  const directory = await mkdtemp(join(tmpdir(), "seraph-appearance-"))
   const uploads = new UploadManager(new FileManager(directory))
   const manager = await AppearanceManager.open(store, uploads)
 

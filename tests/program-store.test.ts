@@ -7,7 +7,7 @@ import ProgramStoreState, { type StoreSnapshot } from "../source/server/core/lin
 const opened: Array<{ directory: string, store: ProgramStoreState }> = []
 
 function store() {
-    const directory = mkdtempSync(join(tmpdir(), "phresh-program-store-"))
+    const directory = mkdtempSync(join(tmpdir(), "seraph-program-store-"))
     const changes: Array<{ key: string, snapshot: StoreSnapshot }> = []
     const instance = new ProgramStoreState(directory, (key, snapshot) => changes.push({ key, snapshot }))
     opened.push({ directory, store: instance })
@@ -73,7 +73,7 @@ describe("ProgramStoreState", () => {
     })
 
     it("recovers a persisted deadline and notifies when that key expires", async () => {
-        const directory = mkdtempSync(join(tmpdir(), "phresh-program-store-restart-"))
+        const directory = mkdtempSync(join(tmpdir(), "seraph-program-store-restart-"))
         const first = new ProgramStoreState(directory, () => undefined)
         try {
             // Long enough to outlast closing and reopening the store on a slow machine.

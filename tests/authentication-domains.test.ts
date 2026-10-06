@@ -6,7 +6,7 @@ import { expect, test } from "vitest"
 import Application from "@server/core/application"
 
 test("browser Connections and Sessions form one authoritative lifecycle", async () => {
-    const home = await mkdtemp(join(tmpdir(), "phreshos-authentication-"))
+    const home = await mkdtemp(join(tmpdir(), "seraphos-authentication-"))
     const application = await Application.initialize(
         home,
         { system: join(home, "logo.png"), defaultProgram: join(home, "icon.png") }

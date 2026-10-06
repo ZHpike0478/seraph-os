@@ -15,7 +15,7 @@ test("program development contract", async () => {
 
       development,
 
-      `http://localhost:4300/program/${development.assetId}/assets/main.ts?direct`
+      `http://localhost:6400/program/${development.assetId}/assets/main.ts?direct`
   )
 
   assert.equal(target?.href, `http://localhost:5173/program/${development.assetId}/assets/main.ts?direct`)
@@ -27,5 +27,5 @@ test("program development contract", async () => {
       client: { location: "dist/client" }
   })
 
-  assert.equal(developmentTarget(production, `http://localhost:4300/program/${production.assetId}/assets/`), null)
+  assert.equal(developmentTarget(production, `http://localhost:6400/program/${production.assetId}/assets/`), null)
 }, 120_000)

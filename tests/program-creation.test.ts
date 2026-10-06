@@ -11,7 +11,7 @@ import ProgramStateStorage from "@server/core/link-manager/auth-manager/program-
 import Program from "@server/core/link-manager/auth-manager/program-manager/program"
 
 function fixture(context: TestContext) {
-    const directory = mkdtempSync(join(tmpdir(), "phresh-program-creation-"))
+    const directory = mkdtempSync(join(tmpdir(), "seraph-program-creation-"))
     context.onTestFinished(() => rmSync(directory, { recursive: true, force: true }))
     const client = join(directory, "client")
     mkdirSync(client)
