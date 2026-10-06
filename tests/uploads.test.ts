@@ -4,6 +4,7 @@ import { resolve } from "node:path"
 import FileManager from "@libs/file-manager"
 import UploadManager from "@server/core/upload-manager"
 import uploadView from "@server/view/http/uploads"
+import type Hub from "@server/core/hub"
 import type Application from "@server/core/application"
 import { Hono } from "hono"
 import { test } from "vitest"
@@ -23,27 +24,33 @@ test("uploads contract", async () => {
       assert.equal(uploads.stat("00000000-0000-0000-0000-000000000000.txt"), null)
       assert.throws(() => uploads.stat("../outside.txt"), /not an upload file/)
 
-      const view = new Hono()
-
-      const application = {
+      const space = {
           uploads,
-          linkManager: {
-              authManager: {
-                  verify(value: unknown) {
-                      if (value !== "allowed") throw new Error("Unauthorized")
-                  },
-                  async upload(authorization: unknown, content: ReadableStream<Uint8Array> | null, extension: string, signal?: AbortSignal) {
-                      this.verify(authorization)
-                      const written = await uploads.write(extension, content, signal)
-                      const upload = uploads.stat(written)
-                      assert(upload)
-                      return { file: written, ...upload }
-                  }
+          authManager: {
+              verify(value: unknown) {
+                  if (value !== "allowed") throw new Error("Unauthorized")
+              },
+              async upload(authorization: unknown, content: ReadableStream<Uint8Array> | null, extension: string, signal?: AbortSignal) {
+                  this.verify(authorization)
+                  const written = await uploads.write(extension, content, signal)
+                  const upload = uploads.stat(written)
+                  assert(upload)
+                  return { file: written, ...upload }
               }
           }
       } as unknown as Application
 
-      view.route("/uploads", uploadView(application))
+      const hub = {
+          async spaceForTokenByHeader(authorization: string | undefined) {
+              if (!authorization) throw new Error("Unauthorized")
+              return space
+          }
+      } as unknown as Hub
+
+      const view = new Hono()
+
+      view.route("/uploads", uploadView(hub))
+
       const response = await view.request("http://system/uploads", {
           method: "POST",
           headers: {
@@ -59,8 +66,8 @@ test("uploads contract", async () => {
       assert.equal(created.file.endsWith(".json"), true)
       assert.equal(created.size, 14)
       assert.equal(typeof created.modifiedAt, "number")
-      const described = await view.request(`http://system/uploads/${created.file}/stat`)
-      const downloaded = await view.request(`http://system/uploads/${created.file}`)
+      const described = await view.request(`http://system/uploads/${created.file}/stat`, { headers: { authorization: "allowed" } })
+      const downloaded = await view.request(`http://system/uploads/${created.file}`, { headers: { authorization: "allowed" } })
 
       assert.equal(described.status, 200)
       assert.equal(downloaded.status, 200)
@@ -71,7 +78,7 @@ test("uploads contract", async () => {
 
       const htmlSource = "<!doctype html><script>document.body.textContent = 'offline wallpaper'</script>"
       const htmlFile = await uploads.write("html", new Blob([htmlSource]).stream())
-      const wallpaper = await view.request(`http://system/uploads/wallpaper/${htmlFile}`)
+      const wallpaper = await view.request(`http://system/uploads/wallpaper/${htmlFile}`, { headers: { authorization: "allowed" } })
 
       assert.equal(wallpaper.status, 200)
       assert.equal(wallpaper.headers.get("cache-control"), "public, max-age=31536000, immutable")
@@ -80,9 +87,13 @@ test("uploads contract", async () => {
       assert.match(wallpaper.headers.get("content-security-policy") ?? "", /script-src 'unsafe-inline' data: blob:/)
       assert.match(wallpaper.headers.get("content-security-policy") ?? "", /sandbox allow-scripts/)
       assert.equal(await wallpaper.text(), htmlSource)
-      assert.equal((await view.request(`http://system/uploads/wallpaper/${created.file}`)).status, 400)
-      assert.equal((await view.request("http://system/uploads/not-a-key")).status, 400)
-      assert.equal((await view.request("http://system/uploads/00000000-0000-0000-0000-000000000000.txt")).status, 404)
+      assert.equal((await view.request(`http://system/uploads/wallpaper/${created.file}`, { headers: { authorization: "allowed" } })).status, 400)
+      assert.equal((await view.request("http://system/uploads/not-a-key", { headers: { authorization: "allowed" } })).status, 400)
+      assert.equal((await view.request("http://system/uploads/00000000-0000-0000-0000-000000000000.txt", { headers: { authorization: "allowed" } })).status, 404)
+
+      // anonymous callers reach nothing
+      assert.equal((await view.request(`http://system/uploads/${created.file}/stat`)).status, 401)
+      assert.equal((await view.request(`http://system/uploads/${created.file}`)).status, 401)
   } finally {
       await rm(directory, { recursive: true, force: true })
   }

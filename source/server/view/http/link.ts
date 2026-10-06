@@ -1,10 +1,20 @@
-import { failed, succeeded } from "@libs/request-outcome"
 import { upgradeWebSocket } from "@hono/node-server"
-import Application from "@server/core/application"
+import Hub from "@server/core/hub"
+import Gate from "@server/core/hub-gate"
 import { HttpServer } from "@the-link/http/server"
 import messagepack from "@the-link/messagepack"
 
-export default function (application: Application, debugging: boolean) {
+/**
+ * The multi-user /link door.
+ *
+ * Every browser connection lands here as an unbound Gate. The gate answers
+ * authentication from the Hub, binds the connection to one account-space once
+ * proven, and from then on relays between the socket and that space's own
+ * LinkManager. The subscribe acknowledgement carries the shared pre-auth
+ * snapshot; the space's own state arrives inside the AuthManager the client
+ * builds after authentication.
+ */
+export default function (hub: Hub, debugging: boolean) {
 
     const http = new HttpServer()
 
@@ -16,43 +26,23 @@ export default function (application: Application, debugging: boolean) {
 
     http.onSubscribe(function (socketLink) {
 
-        const connection = application.linkManager.addConnection(socketLink)
+        const gate = Gate.open(hub, socketLink)
 
-        const stopForwarding = socketLink.$inbound.forwardTo(async function (event, responseUuid: string | null, ...values: unknown[]) {
+        const stopForwarding = socketLink.$inbound.forwardTo(function (event, responseUuid: string | null, ...values: unknown[]) {
 
             // A null response address is an intentional one-way transport
             // envelope. Route it once and do not manufacture an acknowledgement.
-            if (responseUuid === null) {
-
-                connection.publish(event, ...values).catch(() => undefined)
-
-                return
-            }
-
-            try {
-
-                // The correlation address exclusively owns an RPC result.
-                // Shared state changes use their own explicit publications;
-                // request handlers must not also broadcast their return value.
-                const results = await connection.publish(event, ...values)
-
-                await socketLink.$outbound.publish(responseUuid, succeeded(results))
-            }
-
-            catch (exception) {
-
-                await socketLink.$outbound.publish(responseUuid, failed(exception, debugging))
-            }
+            gate.receive(event, responseUuid, ...values)
         })
 
         socketLink.$internal.subscribeOnce("unsubscribe", async function () {
 
-            await application.linkManager.removeConnection(connection)
-
             stopForwarding()
+
+            await gate.close()
         })
 
-        return application.linkManager
+        return gate.acknowledgement()
     })
 
     http.prepareConnection(upgradeWebSocket)

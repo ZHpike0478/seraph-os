@@ -1,12 +1,10 @@
 import { type ProxyOutcome, type ProxyRequest, type ProxyResponse, proxyMediaType } from "@server/core/protocol/proxy"
 import { frame, unframe } from "@libs/framing"
-import Application from "@server/core/application"
+import Hub from "@server/core/hub"
 import { Hono } from "hono"
 
-/** The authorized HTTP door for server-side System fetch. */
-export default function (application: Application) {
-
-    const { authManager } = application.linkManager
+/** The authorized HTTP door for server-side System fetch, per account-space. */
+export default function (hub: Hub) {
 
     const proxy = new Hono()
 
@@ -14,15 +12,9 @@ export default function (application: Application) {
 
         const authorization = context.req.header("authorization")
 
-        try {
+        const space = await hub.spaceForTokenByHeader(authorization).catch(() => null)
 
-            authManager.verify(authorization)
-        }
-
-        catch (exception) {
-
-            return context.text(exception instanceof Error ? exception.message : "Unauthorized", 401)
-        }
+        if (!space) return context.text("Unauthorized", 401)
 
         let request: Awaited<ReturnType<typeof unframe<ProxyRequest>>>
 
@@ -44,50 +36,31 @@ export default function (application: Application) {
 
             const metadata = request.metadata
 
-            const response = await authManager.fetch(authorization, metadata.url, {
+            const response = await space.authManager.fetch(authorization, metadata.url, {
 
                 body: metadata.body ? request.body : undefined,
-
                 cache: metadata.cache,
-
                 credentials: metadata.credentials,
-
                 headers: metadata.headers,
-
                 integrity: metadata.integrity,
-
                 keepalive: metadata.keepalive,
-
                 method: metadata.method,
-
                 mode: metadata.mode,
-
                 redirect: metadata.redirect,
-
                 referrer: metadata.referrer,
-
                 referrerPolicy: metadata.referrerPolicy,
-
                 signal: context.req.raw.signal,
-
                 ...metadata.body ? { duplex: "half" } : {}
-
             } as RequestInit & { duplex?: "half" })
 
             const responseMetadata: ProxyResponse = {
 
                 body: response.body !== null,
-
                 headers: responseHeaders(response.headers),
-
                 redirected: response.redirected,
-
                 status: response.status,
-
                 statusText: response.statusText,
-
                 type: response.type,
-
                 url: response.url
             }
 
@@ -98,25 +71,23 @@ export default function (application: Application) {
 
         catch (exception) {
 
-            outcome = {
+            outcome = { error: asError(exception) }
 
-                error: {
-
-                    message: exception instanceof Error ? exception.message : "The request failed",
-
-                    name: exception instanceof Error ? exception.name : "TypeError"
-                }
-            }
+            if (outcome.error.name === "AbortError") outcome.error = { ...outcome.error, message: "The proxy request was aborted" }
         }
 
-        return new Response(frame(outcome, responseBody), {
+        const framed = frame(outcome, responseBody)
+
+        return new Response(framed, {
 
             headers: {
 
                 "cache-control": "no-store",
 
                 "content-type": proxyMediaType
-            }
+            },
+
+            status: 200
         })
     })
 
@@ -125,11 +96,26 @@ export default function (application: Application) {
 
 function responseHeaders(headers: Headers): [string, string][] {
 
-    const values = [...headers.entries()].filter(([name]) => name !== "set-cookie") as [string, string][]
+    const values = [...headers.entries()].filter(([name]) =>
+
+        // A proxy answer never carries the transport's own hop-by-hop names,
+        // and one cookie header per value survives through getSetCookie.
+        !/^(transfer-encoding|content-encoding|content-length|connection|keep-alive)$/i.test(name)
+    ) as [string, string][]
 
     const getSetCookie = (headers as Headers & { getSetCookie?: () => string[] }).getSetCookie
 
     if (getSetCookie) for (const value of getSetCookie.call(headers)) values.push(["set-cookie", value])
 
     return values
+}
+
+function asError(exception: unknown): ProxyOutcome extends { error: infer E } ? E : never {
+
+    return {
+
+        message: exception instanceof Error ? exception.message : "The request failed",
+
+        name: exception instanceof Error ? exception.name : "TypeError"
+    } as never
 }

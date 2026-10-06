@@ -181,11 +181,27 @@ export default class LinkManager extends TheLink {
         return connection.transition(() => this.signInConnectionNow(connection))
     }
 
+    /**
+     * Observes every raw Session token this space creates, exactly as its own
+     * client receives it. The multi-user Hub records where each token lives;
+     * nothing else sees the value.
+     */
+    public onSessionToken(listener: (token: string) => void) {
+
+        this.sessionTokenListeners.add(listener)
+
+        return () => this.sessionTokenListeners.delete(listener)
+    }
+
+    private readonly sessionTokenListeners = new Set<(token: string) => void>()
+
     private async signInConnectionNow(connection: LinkBoundary) {
 
         this.requirePublicConnection(connection)
 
         const result = await this.addSession(connection)
+
+        for (const listener of this.sessionTokenListeners) listener(result.token)
 
         try {
 

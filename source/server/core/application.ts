@@ -38,6 +38,24 @@ export default class Application {
     /** One authoritative System domain shared by every trusted adapter. */
     public readonly system: System
 
+    /** The Link-bound auth manager: programs, processes, permissions. */
+    public get authManager() {
+
+        return this.linkManager.authManager
+    }
+
+    /** The Program registry this space serves. */
+    public get programManager() {
+
+        return this.linkManager.authManager.programManager
+    }
+
+    /** The Process registry of this space. */
+    public get processManager() {
+
+        return this.linkManager.authManager.processManager
+    }
+
     /** Core-owned factory for every Server execution environment. */
     public readonly createServerRuntime: typeof createServerRuntime
 
@@ -66,11 +84,11 @@ export default class Application {
         this.system = new System(this)
     }
 
-    public static async initialize(homePath: string, icons: ApplicationIcons, authentication?: Authentication) {
+    public static async initialize(homePath: string, icons: ApplicationIcons, authentication?: Authentication, options?: { nativeRoot?: string }) {
 
         const storage = new FileManager(homePath)
 
-        const home = new FileSystem(homedir(), "the native filesystem")
+        const home = new FileSystem(options?.nativeRoot ?? homedir(), "the native filesystem")
 
         const store = openStore(storage.path)
 

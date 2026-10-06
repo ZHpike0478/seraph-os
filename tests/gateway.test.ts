@@ -5,7 +5,8 @@ import { SocketClient } from "@the-link/ipc/socket-client"
 import messagepack from "@the-link/messagepack"
 import gatewayAddress from "@server/view/gateway/address"
 import gateway from "@server/view/gateway/gateway"
-import type LinkManager from "@server/core/link-manager/link-manager"
+import type Hub from "@server/core/hub"
+import type Application from "@server/core/application"
 import { test } from "vitest"
 
 test("gateway contract", async () => {
@@ -20,23 +21,29 @@ test("gateway contract", async () => {
           processManager: { processes: [] }
       }
   }
-  const linkManager = {
-      addExternalConnection() {
-          return {
-              async publish(event: string, ...values: unknown[]) {
-                  received.push([event, ...values])
-                  return [{ event, values }]
+  const space = {
+      linkManager: {
+          addExternalConnection() {
+              return {
+                  async publish(event: string, ...values: unknown[]) {
+                      received.push([event, ...values])
+                      return [{ event, values }]
+                  }
               }
-          }
-      },
-      authManager: { ...snapshot.authManager, toJSON() { return snapshot.authManager } },
-      toJSON() { return snapshot.linkManager },
-      async removeConnection() { removed = true }
-  }
-  const listener = await gateway(linkManager as unknown as LinkManager, path)
+          },
+          authManager: { ...snapshot.authManager, toJSON() { return snapshot.authManager } },
+          toJSON() { return snapshot.linkManager },
+          async removeConnection() { removed = true }
+      }
+  } as unknown as Application
+  const hub = {
+      async adminSpace() { return space }
+  } as unknown as Hub
+  const listener = await gateway(hub, path)
   const client = new SocketClient(path)
 
   client.setSerialize(messagepack.serialize)
+
   client.setDeserialize(messagepack.deserialize)
 
   const ready = client.$inbound.waitFirst("/gateway/ready")

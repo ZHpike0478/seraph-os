@@ -1,6 +1,6 @@
 import { serveStatic } from "@hono/node-server/serve-static"
 import { MissingUploadValueError, UploadTooLargeError, uploadLimit } from "@server/core/upload-manager"
-import Application from "@server/core/application"
+import Hub from "@server/core/hub"
 import doors from "./doors"
 import { Hono } from "hono"
 import { isUploadFile } from "@phreshos/core"
@@ -28,16 +28,16 @@ const wallpaperPolicy = [
 /**
  * The door bytes come through, and the one they go back out of.
  *
- * Transport only: making a value public is an authorized operation on the
- * auth manager. Reading the completed file needs no authorization.
+ * Transport only: making a value public is an authorized operation in the
+ * connection's own account-space. Reading the completed file needs no
+ * authorization: a completed upload's name is unguessable (random UUID) and
+ * its reach belongs to the space that uploaded it.
  *
  * The request body remains a stream all the way into UploadManager. Declared
  * oversize bodies are refused before reading; undeclared ones are counted as
  * they arrive, with incomplete temporary files removed on every failure.
  */
-export default function (application: Application) {
-
-    const { authManager } = application.linkManager
+export default function (hub: Hub) {
 
     const uploads = new Hono()
 
@@ -45,28 +45,18 @@ export default function (application: Application) {
 
         const authorization = context.req.header("authorization")
 
-        try {
+        const space = await hub.spaceForTokenByHeader(authorization).catch(() => null)
 
-            authManager.verify(authorization)
-        }
-
-        catch (exception) {
-
-            return context.text(exception instanceof Error ? exception.message : "Unauthorized", 401)
-        }
+        if (!space) return context.text("Unauthorized", 401)
 
         if (Number(context.req.header("content-length")) > uploadLimit) return context.text(new UploadTooLargeError().message, 413)
 
         try {
 
-            const upload = await authManager.upload(
-
+            const upload = await space.authManager.upload(
                 authorization,
-
                 context.req.raw.body,
-
                 extension(filename(context.req.header("content-disposition"))) ?? typeExtension(context.req.header("content-type") ?? null),
-
                 context.req.raw.signal
             )
 
@@ -87,11 +77,15 @@ export default function (application: Application) {
         }
     })
 
-    uploads.get("/:file/stat", function (context) {
+    uploads.get("/:file/stat", async function (context) {
+
+        const space = await hub.spaceForTokenByHeader(context.req.header("authorization")).catch(() => null)
+
+        if (!space) return context.text("Unauthorized", 401)
 
         try {
 
-            const upload = application.uploads.stat(context.req.param("file"))
+            const upload = space.uploads.stat(context.req.param("file"))
 
             if (!upload) return context.body(null, 404)
 
@@ -107,13 +101,19 @@ export default function (application: Application) {
     })
 
     uploads.get("/wallpaper/:file", async function (context) {
+
         const file = context.req.param("file")
 
         if (!isUploadFile(file)) return context.text("That is not an upload file", 400)
         if (wallpaperKind(file) !== "html") return context.text("That upload is not an HTML wallpaper", 400)
 
+        const space = await hub.spaceForTokenByHeader(context.req.header("authorization")).catch(() => null)
+
+        if (!space) return context.text("Unauthorized", 401)
+
         try {
-            const upload = application.uploads.stat(file)
+
+            const upload = space.uploads.stat(file)
 
             if (!upload) return context.body(null, 404)
             if (upload.size > wallpaperSizeLimit) return context.text("A wallpaper cannot exceed 50 MiB", 413)
@@ -123,7 +123,7 @@ export default function (application: Application) {
             context.header("X-Content-Type-Options", "nosniff")
             context.header("Cache-Control", immutableCache)
 
-            return context.body(Uint8Array.from(await readFile(application.uploads.path(file))))
+            return context.body(Uint8Array.from(await readFile(space.uploads.path(file))))
         }
 
         catch (error) {
@@ -137,9 +137,13 @@ export default function (application: Application) {
 
         if (!isUploadFile(file)) return context.text("That is not an upload file", 400)
 
+        const space = await hub.spaceForTokenByHeader(context.req.header("authorization")).catch(() => null)
+
+        if (!space) return context.text("Unauthorized", 401)
+
         try {
 
-            if (!application.uploads.stat(file)) return context.body(null, 404)
+            if (!space.uploads.stat(file)) return context.body(null, 404)
         }
 
         catch (error) {
@@ -153,15 +157,43 @@ export default function (application: Application) {
         context.header("Access-Control-Allow-Origin", "*")
     })
 
-    uploads.use("/:file", serveStatic({
-
-        root: application.uploads.fileManager.path,
-
-        rewriteRequestPath: path => path.slice(doors.uploads.length + 1)
-    }))
+    uploads.use("/:file", serveStaticDynamic(hub))
 
     return uploads
 }
+
+/** Static serving from each account-space's uploads, resolved per request. */
+function serveStaticDynamic(hub: Hub) {
+
+    const handlers = new Map<string, ReturnType<typeof serveStatic>>()
+
+    return async function (context: ParameterContext, next: () => Promise<void>) {
+
+        const space = await hub.spaceForTokenByHeader(context.req.header("authorization")).catch(() => null)
+
+        if (!space) return context.text("Unauthorized", 401)
+
+        const root = space.uploads.fileManager.path
+
+        let handler = handlers.get(root)
+
+        if (!handler) {
+
+            handler = serveStatic({
+
+                root,
+
+                rewriteRequestPath: path => path.slice(doors.uploads.length + 1)
+            })
+
+            handlers.set(root, handler)
+        }
+
+        return await handler(context, next)
+    }
+}
+
+type ParameterContext = Parameters<ReturnType<typeof serveStatic>>[0]
 
 // The standard place a filename travels when a body is raw bytes.
 function filename(disposition: string | undefined) {

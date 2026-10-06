@@ -1,5 +1,7 @@
 import { DatabaseSync } from "node:sqlite"
 import { randomBytes, scrypt as derive, timingSafeEqual } from "node:crypto"
+import { mkdirSync } from "node:fs"
+import { dirname } from "node:path"
 
 const parameters = {
 
@@ -56,6 +58,8 @@ export default class Accounts {
     }
 
     public static open(path: string) {
+
+        mkdirSync(dirname(path), { recursive: true })
 
         const database = new DatabaseSync(path)
 
@@ -370,6 +374,10 @@ function validate(username: string, password: string): string | null {
     if (usernameLength < requirements.username.minimumLength) return "username-required"
 
     if (usernameLength > requirements.username.maximumLength || /\p{Cc}/u.test(username)) return "username-invalid"
+
+    // Usernames reach the filesystem as account-space directory names; a
+    // separator, a traversal step, or a dot name has no place in one.
+    if (/[/\\]/.test(username) || username === "." || username === ".." || username.startsWith("..")) return "username-invalid"
 
     const passwordLength = [...password].length
 

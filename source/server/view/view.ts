@@ -1,4 +1,5 @@
-import Application from "@server/core/application"
+import { type ApplicationIcons } from "@server/core/application"
+import Hub from "@server/core/hub"
 import { serveStatic } from "@hono/node-server/serve-static"
 import { createAdaptorServer } from "@hono/node-server"
 import { WebSocketServer } from "ws"
@@ -29,23 +30,24 @@ export default async function (config: Config) {
         font: "simple"
     })
 
-    const application = await Application.initialize(config.home, { system: resolve("assets/logo.png"), defaultProgram: resolve("assets/default-icon.png") })
+    const icons: ApplicationIcons = { system: resolve("assets/logo.png"), defaultProgram: resolve("assets/default-icon.png") }
 
-    // One server, five doors, each at its own name. A program's client
-    // is still not the API — it is files a browser reads, with no link,
-    // no authorization and no operations — but a separate port was a
-    // second address for one machine. The names keep them apart.
+    const hub = Hub.open(config.home, icons)
+
+    // One server, five doors, each at its own name. The link door is the
+    // multi-user gate; the other doors resolve the caller's token to its own
+    // account-space before answering.
     const server = new Hono()
 
-    server.route(doors.link, link(application, debugging))
+    server.route(doors.link, link(hub, debugging))
 
-    server.route(doors.proxy, proxy(application))
+    server.route(doors.proxy, proxy(hub))
 
-    server.route(doors.storage, storage(application))
+    server.route(doors.storage, storage(hub))
 
-    server.route(doors.uploads, uploads(application))
+    server.route(doors.uploads, uploads(hub))
 
-    server.route(doors.program, program(application))
+    server.route(doors.program, program(hub))
 
     if (config.assets) server.use("*", serveStatic({ root: config.assets }))
 
@@ -65,9 +67,9 @@ export default async function (config: Config) {
 
     const origin = `http://localhost:${port}`
 
-    await writeFile(resolve(application.storage.path, "desktop"), `${origin}\n`, { mode: 0o600 })
+    await writeFile(resolve(config.home, "desktop"), `${origin}\n`, { mode: 0o600 })
 
-    const localGateway = await gateway(application.linkManager, gatewayAddress(application.storage.path))
+    const localGateway = await gateway(hub, gatewayAddress(config.home))
 
     if (config.assets) console.log(`  ➜  ${styleText("bold", "Desktop:")} ${origin}`)
 

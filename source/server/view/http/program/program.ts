@@ -1,24 +1,25 @@
 import { serveStatic } from "@hono/node-server/serve-static"
-import Application from "@server/core/application"
+import Hub from "@server/core/hub"
+import doors from "../doors"
 import { isIconSize } from "@server/core/link-manager/auth-manager/program-manager/icon"
 import { existsSync } from "node:fs"
 import { Hono } from "hono"
-import doors from "../doors"
 import { developmentResponse, developmentSocket, developmentTarget } from "./development"
 import { frameTheme, themedFrameDocument } from "./frame-document"
 
 /**
- * The browser representation of one Program domain.
+ * The browser representation of one Program domain, inside the caller's
+ * account-space.
  *
  * Every Client document uses `/program/<assetId>/assets`, independently of
  * whether its source is an installed directory or a live development server.
  * Icons use the same asset identity beneath `/program/<assetId>/icons`.
  */
-export default function (application: Application) {
-
-    const { programManager } = application.linkManager.authManager
+export default function (hub: Hub) {
 
     const program = new Hono()
+
+    const statics = new Map<string, ReturnType<typeof serveStatic>>()
 
     // The hidden Desktop probe deliberately asks from an opaque origin. Keep
     // this header on every Program response so an outer reverse proxy becomes
@@ -45,7 +46,11 @@ export default function (application: Application) {
 
         if (context.req.header("upgrade")?.toLowerCase() !== "websocket") return await next()
 
-        const found = programManager.fromAsset(context.req.param("assetId") ?? "")
+        const space = await spaceOf(hub, context)
+
+        if (!space) return context.text("Unauthorized", 401)
+
+        const found = space.programManager.fromAsset(context.req.param("assetId") ?? "")
 
         if (!found) return context.text("Unknown program", 404)
 
@@ -58,9 +63,13 @@ export default function (application: Application) {
 
     program.all("/:assetId{[0-9a-f-]{36}}/assets/:path{.*}", async context => {
 
+        const space = await spaceOf(hub, context)
+
+        if (!space) return context.text("Unauthorized", 401)
+
         const assetId = context.req.param("assetId") ?? ""
 
-        const found = programManager.fromAsset(assetId)
+        const found = space.programManager.fromAsset(assetId)
 
         if (!found) return context.text("Unknown program", 404)
 
@@ -75,20 +84,34 @@ export default function (application: Application) {
         // A retained Program may outlive files removed by uninstall().
         if (!root || !existsSync(root)) return context.text("The program has no assets", 404)
 
-        const response = await serveStatic({
+        const prefix = `${doors.program}/${assetId}/assets`
 
-            root,
+        let serve = statics.get(root)
 
-            rewriteRequestPath: path => path.slice(`${doors.program}/${assetId}/assets`.length)
+        if (!serve) {
 
-        })(context, async () => undefined)
+            serve = serveStatic({
+
+                root,
+
+                rewriteRequestPath: path => path.slice(prefix.length)
+            })
+
+            statics.set(root, serve)
+        }
+
+        const response = await serve(context, async () => undefined)
 
         return response ? await themedFrameDocument(response, theme) : response
     })
 
     program.get("/:assetId{[0-9a-f-]{36}}/icons/:file", async context => {
 
-        const found = programManager.fromAsset(context.req.param("assetId") ?? "")
+        const space = await spaceOf(hub, context)
+
+        if (!space) return context.text("Unauthorized", 401)
+
+        const found = space.programManager.fromAsset(context.req.param("assetId") ?? "")
 
         if (!found) return context.text("Unknown program", 404)
 
@@ -102,8 +125,14 @@ export default function (application: Application) {
 
         context.header("Content-Type", "image/png")
 
-        return context.body(Uint8Array.from(await programManager.icon(found, size)))
+        return context.body(Uint8Array.from(await space.programManager.icon(found, size)))
     })
 
     return program
+}
+
+/** The caller's account-space; program assets belong to the space that owns them. */
+async function spaceOf(hub: Hub, context: { req: { header: (name: string) => string | undefined } }) {
+
+    return await hub.spaceForTokenByHeader(context.req.header("authorization")).catch(() => null)
 }

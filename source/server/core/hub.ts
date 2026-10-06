@@ -112,7 +112,10 @@ export default class Hub {
 
         const authentication = await Authentication.openDelegated(username, this.accounts, store)
 
-        return await Application.initialize(homePath, this.icons, authentication)
+        // One account-space keeps its System storage inside its own home:
+        // a shared host has one operating-system user, so the native home
+        // would otherwise be a cross-user channel.
+        return await Application.initialize(homePath, this.icons, authentication, { nativeRoot: join(homePath, "system") })
     }
 
     /** Records which account-space created a session token. */
@@ -151,6 +154,52 @@ export default class Hub {
     public forgetSessionsOf(username: string) {
 
         this.sessions.prepare("delete from session_index where username = ?").run(username)
+    }
+
+    /**
+     * Resolves one raw token to its live account-space, or null. A token the
+     * Hub remembers but the space has dropped (expired, signed out) is
+     * forgotten here too.
+     */
+    public async spaceForToken(token: string): Promise<Application | null> {
+
+        const username = this.sessionUsername(token)
+
+        if (!username) return null
+
+        const space = await this.space(username)
+
+        if (space.authentication.resolveSession(token)) return space
+
+        this.forgetSession(token)
+
+        return null
+    }
+
+    /** The account-space of the first live administrator, for owner-local boundaries. */
+    public async adminSpace(): Promise<Application | null> {
+
+        const admin = this.accounts.list().find(account => account.role === "admin" && !account.disabled)
+
+        return admin ? await this.space(admin.username) : null
+    }
+
+    /** Every account-space currently open; opening none. */
+    public async openedSpaces(): Promise<Application[]> {
+
+        return await Promise.all([...this.spaces.values()])
+    }
+
+    /** Resolves an authorization header to the caller's live account-space. */
+    public async spaceForTokenByHeader(authorization: string | undefined): Promise<Application> {
+
+        if (typeof authorization !== "string" || !authorization) throw new Error("Unauthorized")
+
+        const space = await this.spaceForToken(authorization)
+
+        if (!space) throw new Error("Unauthorized")
+
+        return space
     }
 }
 
