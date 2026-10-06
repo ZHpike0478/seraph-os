@@ -190,15 +190,21 @@ after any port-range rename (a bad rename once produced a "valid" range).
    `signInWallpaper` from it and React died before the sign-in UI; the ack
    now carries `defaultAppearance` (gate.acknowledgement in hub-gate.ts).
 
-6. **Upstream sync** — upstream is an active repo (0.1.117 → newer). The
-   fork's patch surface for rebases is exactly: accounts.ts, hub.ts,
-   hub-gate.ts, authentication.ts (delegated mode), application.ts
-   (initialize signature), the four http doors, gateway.ts, view.ts,
-   hardening, identity/branding, process-window.tsx (assistant seam),
-   link-manager.ts (`onSessionToken`), auth-manager.ts (assistant routes).
-   PLAN.md holds the living list.
-7. **Signed releases** — `pack.ts` emits zip+sha256; add signing/provenance
-   before distributing binaries to anyone else.
+6. DONE (2026-10-06) — Upstream sync: upstream moved only one release beyond
+   the fork point (`0.1.117` → `0.1.118` + one test-timing commit, `9ce159b`).
+   Both changes applied: `@the-link/http` `^0.2.1` (lockfile bumped) and the
+   slow-machine expiry-test timing in `tests/program-store.test.ts`. No
+   conflicts — none of the fork's patch surface overlaps. Next sync point:
+   upstream `main` (`9ce159b`) is the last change as of this date.
+
+7. DONE (2026-10-06) — Signed releases: `pack.ts` signs the archive Ed25519
+   when `SERAPHOS_RELEASE_KEY` points at the operator's signing PEM
+   (`seraphos@x.zip.ed25519.sig` beside the sha256), `scripts/verify-release.ts`
+   verifies archive + signature for consumers, `scripts/release-keygen.ts`
+   mints the pair once, and the verifying half is committed as
+   `scripts/release-public.pem`. Unsigned-by-default keeps unattended verify
+   green; a configured-but-missing signing PEM fails the pack instead of
+   silently shipping an unsigned artifact.
 
 ## Environment (all optional; System runs without any)
 

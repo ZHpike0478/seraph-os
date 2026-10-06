@@ -112,6 +112,34 @@ $SERAPHOS_HOME/
 | `bun run verify` | Type-check, build, and test — the gate every change passes |
 | `bun run pack` | Build the release zip + sha256 |
 
+## Signed releases
+
+Releases are Ed25519-signed: `bun run pack` writes `seraphos@<version>.zip`
++ `seraphos@<version>.zip.sha256` as before, and — once a signing key is
+configured — `<archive>.ed25519.sig` beside them.
+
+Mint the key pair once (the private half lands in `~/.seraphos`; the
+public half is committed as `scripts/release-public.pem`):
+
+```sh
+bunx vite-node scripts/release-keygen.ts
+```
+
+Point the pack at the signing half when cutting a release:
+
+```sh
+SERAPHOS_RELEASE_KEY=~/.seraphos/release-privatekey.pem bunx vite-node scripts/pack.ts
+```
+
+Without that variable the release packs unsigned (checksum only); a
+configured-but-missing key file fails the pack. Consumers verify after
+downloading:
+
+```sh
+bunx vite-node scripts/verify-release.ts seraphos@0.2.0.zip \
+    seraphos@0.2.0.zip.ed25519.sig scripts/release-public.pem
+```
+
 ## Security notes
 
 - Report vulnerabilities privately (see SECURITY.md).
@@ -120,6 +148,4 @@ $SERAPHOS_HOME/
   timing-safe comparison. Session tokens: 32 random bytes, stored only as
   SHA-256 hashes.
 - Known limits vs a full zero-trust spec: the LAN is still trusted for
-  unauthenticated probing of program assets (per the upstream design), the
-  assistant's write tools are not yet user-confirmed in the UI, and release
-  artifacts ship unsigned.
+  unauthenticated probing of program assets (per the upstream design).

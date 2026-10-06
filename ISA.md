@@ -181,3 +181,16 @@ principal_stated_goal: "continue" (handoff item 5: first-boot flow, accounts dia
 - Crash root cause: gate acknowledgement carried `appearance { value: null }`; the anonymous stage painted signInWallpaper from it; React threw 'Cannot read properties of null (reading signInWallpaper)' captured via CDP Runtime exception events - reproducible before, absent after.
 - Fix: hub-gate.ts acknowledgement() now answers the anonymous subscribe with `defaultAppearance` (from @phreshos/core). Enter-time push of the space's real appearance unchanged.
 - Honest residual: assistant-confirm-dialog pixels (Allow/Deny buttons in a real screen) need a configured model endpoint to drive a real write ask; covered today at SSR + code-path level only.
+
+# Run 6 - Signed releases (2026-10-06)
+
+principal_stated_goal: "do 7" (handoff item 7: signing/provenance before distributing binaries)
+
+## Claims
+- C25: A release packs unsigned when no signing env is configured (checksum only) and signed when it is; a configured-but-missing signing PEM fails pack with a clear error. FALSIFIER: module+script tests; distribution flow untouched.
+- C26: Consumers verify a release with sha256 + Ed25519 against the committed verifying half; any tampered byte fails. FALSIFIER: tests/release-signing.test.mjs round-trip/tamper/wrong-key cases.
+
+### Run 6 evidence (collapsed at close)
+- C25 [x] e2e driver run by parent: keygen -> SERAPHOS_RELEASE_KEY-signed pack ('Signed the archive (Ed25519).') -> verify-release.ts VERIFIED exit 0; without the env var pack stays green unsigned (distribution test in verify). Configured-but-missing path asserts via pack.ts branch (exit 1).
+- C26 [x] tests/release-signing.test.mjs 6/6 by parent: round-trip, tamper, wrong-verifying-half, digest shape, 64-byte signature, malformed-sig no-throw. Tampered archive refuses; wrong verifying half refuses.
+- Scheme: Node-native Ed25519, no new dependency; sensitive half lives outside the repository (~/.seraphos), verifying half committed as the repo's own truth.
