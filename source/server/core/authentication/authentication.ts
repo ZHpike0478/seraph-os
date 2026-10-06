@@ -118,6 +118,16 @@ export default class Authentication {
         return this.owner?.username ?? null
     }
 
+    /**
+     * The account store this space's credentials live in, when they live in
+     * one. Null means credentials are local (single-space mode). Reading is
+     * the whole grant: a space already holds its accounts; no hub crosses in.
+     */
+    public get accountStore(): Accounts | null {
+
+        return this.delegated
+    }
+
     public state(): AuthenticationState {
 
         return {

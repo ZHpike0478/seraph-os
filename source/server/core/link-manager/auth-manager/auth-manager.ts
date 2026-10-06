@@ -8,6 +8,7 @@ import { parsePermissionName, type PermissionRequestInput } from "@phreshos/core
 import ShellManager from "./shell-manager"
 import PermissionManager from "../../permission-manager"
 import OpeningManager from "../../opening-manager"
+import Accounts, { type AccountRole, type AccountSnapshot } from "../../accounts"
 
 export default class AuthManager extends TheLink {
 
@@ -530,6 +531,68 @@ export default class AuthManager extends TheLink {
         return true
     }
 
+    // Account administration resolves entirely inside the space: the shared
+    // store is what the space's Authentication already holds, and only its
+    // administrator may change it. The caller's session token has already
+    // been stripped by the inbound intercept, so every handler below works
+    // with the operation's true arguments.
+    private adminAccounts(): Accounts {
+
+        const authentication = this.linkManager.application.authentication
+
+        const store = authentication.accountStore
+
+        const caller = store?.find(authentication.username ?? "") ?? null
+
+        if (!store || !caller || caller.role !== "admin" || caller.disabled) {
+            throw new Error("Only an administrator may manage accounts")
+        }
+
+        return store
+    }
+
+    @Subscribe("/accounts/list")
+    protected async accountsList() {
+
+        return this.adminAccounts().list().map(account => accountView(account))
+    }
+
+    @Subscribe("/accounts/create")
+    protected async accountsCreate(username: unknown, password: unknown, role: unknown) {
+
+        return accountView(await this.adminAccounts().create(
+            accountUsername(username),
+            accountPassword(password),
+            accountRole(role)
+        ))
+    }
+
+    @Subscribe("/accounts/set-role")
+    protected async accountsSetRole(username: unknown, role: unknown) {
+
+        await this.adminAccounts().setRole(accountUsername(username), accountRole(role))
+
+        return true
+    }
+
+    @Subscribe("/accounts/set-disabled")
+    protected async accountsSetDisabled(username: unknown, disabled: unknown) {
+
+        if (typeof disabled !== "boolean") throw new Error("An account disability is a boolean")
+
+        await this.adminAccounts().setDisabled(accountUsername(username), disabled)
+
+        return true
+    }
+
+    @Subscribe("/accounts/reset-credentials")
+    protected async accountsResetCredentials(username: unknown, password: unknown) {
+
+        await this.adminAccounts().resetCredentials(accountUsername(username), accountPassword(password))
+
+        return true
+    }
+
     public async writeArea(sessionToken: unknown, program: unknown, area: "data" | "cache", path: string[], content: ReadableStream<Uint8Array> | null, signal?: AbortSignal, overwrite = true) {
 
         this.verify(sessionToken)
@@ -566,9 +629,15 @@ export default class AuthManager extends TheLink {
 
     public toJSON() {
 
+        const authentication = this.linkManager.application.authentication
+
+        const account = authentication.accountStore?.find(authentication.username ?? "") ?? null
+
         return {
 
-            username: this.linkManager.application.authentication.username,
+            username: authentication.username,
+
+            role: account?.role ?? null,
 
             programManager: this.programManager,
 
@@ -579,6 +648,35 @@ export default class AuthManager extends TheLink {
             openingManager: this.openingManager
         }
     }
+}
+
+/** One account of the shared store, without credential material; creation time serializes. */
+export type AccountView = Readonly<{ username: string, role: "admin" | "user", disabled: boolean, createdAt: number }>
+
+function accountView(account: AccountSnapshot): AccountView {
+
+    return { username: account.username, role: account.role, disabled: account.disabled, createdAt: account.createdAt.getTime() }
+}
+
+function accountUsername(value: unknown): string {
+
+    if (typeof value !== "string" || !value.trim()) throw new Error("An account needs a username")
+
+    return value
+}
+
+function accountPassword(value: unknown): string {
+
+    if (typeof value !== "string") throw new Error("An account needs a password")
+
+    return value
+}
+
+function accountRole(value: unknown): AccountRole {
+
+    if (value !== "admin" && value !== "user") throw new Error("An account role is either administrator or user")
+
+    return value
 }
 
 function storageListOptions(value: unknown) {
@@ -626,6 +724,8 @@ function storageWatchTarget(value: unknown) {
 export interface AuthManagerSnapshot {
 
     username: string | null
+
+    role: "admin" | "user" | null
 
     programManager: ReturnType<ProgramManager["toJSON"]>
 

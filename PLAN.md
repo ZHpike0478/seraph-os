@@ -31,7 +31,7 @@ one user's data to another):
    appearance + uploads + desktop-file per user
 5. DONE — Gate handles owner state/sign-up/sign-in/session-authenticate; bootstrap admin on first visit; live wire probes passed (subscribe ack, anon state, sign-up+token push, second-connection sign-in, bound RPC). Client cutover verified over the real wire (messagepack ws).
    binding everywhere the Desktop reads state; bootstrap admin prompt on first
-   Desktop visit; admin account management routes (`/accounts/*`, admin-only)
+   Desktop visit; admin account management routes (`/accounts/*`, admin-only) — DONE
 6. Gateway authenticates as administrator
 
 Design decisions (confirmed by the owner):

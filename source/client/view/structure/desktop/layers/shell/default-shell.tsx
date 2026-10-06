@@ -3,6 +3,7 @@ import { useState, type ReactNode } from "react"
 import SystemErrors from "./dialogs/system-errors"
 import PermissionRequests from "./dialogs/permission-requests"
 import OpenRequests from "./dialogs/open-requests"
+import AccountsDialog, { AccountsButton } from "./dialogs/accounts"
 import StartMenu, { StartMenuButton, StartMenuProvider, useStartMenuOpen } from "./start-menu/start-menu"
 import SignOut from "./taskbar/sign-out"
 import Taskbar from "./taskbar/taskbar"
@@ -38,6 +39,8 @@ export default function DefaultShell({ spacing, taskbar, viewport, mappedWindows
 
         <OpenRequests />
 
+        <AccountsDialog />
+
     </>
 }
 
@@ -56,7 +59,7 @@ function DefaultTaskbar({ spacing, taskbar, viewport, mappedWindows, horizontal,
     return <Taskbar
         leading={<StartMenuButton showLabel={horizontal} />}
         navigation={<MapControl viewport={viewport} windows={mappedWindows} taskbar={taskbar} spacing={spacing} onOpenChange={setMapOpen} />}
-        trailing={<SignOut showLabel={horizontal} />}
+        trailing={<><AccountsButton /> <SignOut showLabel={horizontal} /></>}
         spacing={spacing}
         taskbar={taskbar}
         keepVisible={startMenuOpen || mapOpen}

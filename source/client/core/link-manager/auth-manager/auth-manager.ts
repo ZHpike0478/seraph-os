@@ -18,6 +18,9 @@ export default class AuthManager extends TheLink {
 
     public readonly username: string | null
 
+    /** What this signed-in account is, as the signing-in named it. */
+    public readonly role: "admin" | "user" | null
+
     public readonly programManager: ProgramManager
 
     public readonly processManager: ProcessManager
@@ -39,6 +42,8 @@ export default class AuthManager extends TheLink {
         this.sessionToken = sessionToken
 
         this.username = payload.username
+
+        this.role = payload.role ?? null
 
         this.connectTo(this.linkManager, "/auth")
 
@@ -78,6 +83,12 @@ export default class AuthManager extends TheLink {
     public session(operation: "state" | "connections" | "sign-out", identity?: string) {
 
         return this.$outbound.publishFirst(`/session/${operation}`, ...(identity === undefined ? [] : [identity]))
+    }
+
+    /** One accounts operation against the shared store, administrators only. */
+    public async accounts(operation: "list" | "create" | "set-role" | "set-disabled" | "reset-credentials", ...values: unknown[]) {
+
+        return await this.$outbound.publishFirst(`/accounts/${operation}`, ...values)
     }
 
     public logs(statement: string, values: unknown[] = []) {
