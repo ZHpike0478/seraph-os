@@ -498,22 +498,43 @@ export default class AuthManager extends TheLink {
         // AuthManager.connection() is the invoking connection's identity.
         const connection = this.connection()
 
-        let reply = ""
+        // The turn is a troubleshooting fact of its own: who asked, how long
+        // it took, how it ended. Content is never logged - the user's words
+        // stay in the conversation store, not in the operator's logs.
+        const startedAt = Date.now()
 
-        for await (const chunk of assistant.turn(content)) {
+        const username = application.authentication.username
 
-            if (chunk.delta) {
+        try {
 
-                reply += chunk.delta
+            let reply = ""
 
-                await this.publishToBoundary(connection, "/assistant/chunk", chunk.delta).catch(() => undefined)
+            for await (const chunk of assistant.turn(content)) {
+
+                if (chunk.delta) {
+
+                    reply += chunk.delta
+
+                    await this.publishToBoundary(connection, "/assistant/chunk", chunk.delta).catch(() => undefined)
+                }
             }
+
+            // The done sentinel: an empty delta the receiving relay knows.
+            await this.publishToBoundary(connection, "/assistant/chunk", "").catch(() => undefined)
+
+            try { application.logs.record("debug", "assistant", "turnCompleted", `A chat turn completed in ${Date.now() - startedAt} ms`, { user: username, durationMs: Date.now() - startedAt, replyLength: reply.length }) }
+            catch { }
+
+            return reply
         }
 
-        // The done sentinel: an empty delta the receiving relay knows.
-        await this.publishToBoundary(connection, "/assistant/chunk", "").catch(() => undefined)
+        catch (exception) {
 
-        return reply
+            try { application.logs.record("error", "assistant", "turnFailed", `A chat turn failed after ${Date.now() - startedAt} ms: ${exception instanceof Error ? exception.message : String(exception)}`, { user: username, durationMs: Date.now() - startedAt }) }
+            catch { }
+
+            throw exception
+        }
     }
 
     /** Forgets one saved memory fact. */

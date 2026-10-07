@@ -3,6 +3,7 @@ import type { AssistantTool } from "./assistant"
 import ConnectionsStore, { type ConnectionKind, connectionEndpoint, connectionKind, connectionName, connectionToken } from "./connections"
 import McpClient from "./mcp"
 import { contentIsTextish, guardedFetch } from "./web-guard"
+import { safeData } from "../instrumentation"
 
 /**
  * The connectivity tools: connections the user saves in their own space
@@ -12,6 +13,12 @@ import { contentIsTextish, guardedFetch } from "./web-guard"
  * name another space: every lookup runs against this space's own store.
  */
 export default function connectionTools(application: Application, store: ConnectionsStore): AssistantTool[] {
+
+    const log = (level: "info" | "warning" | "error", kind: string, content: string, data: unknown = null) => {
+
+        try { application.logs.record(level, "assistant", kind, content, safeData(data)) }
+        catch { /* Logging never obstructs the tool. */ }
+    }
 
     /** Streamable-HTTP MCP sessions live per space, in memory, until close. */
     const sessions = new Map<string, McpClient>()
@@ -58,7 +65,14 @@ export default function connectionTools(application: Application, store: Connect
 
                 const confirmed = await application.authManager.assistantConfirmManager.request("connections_save", `Save the ${kind} connection "${name}" pointing at ${endpoint}${token ? " (with a secret)" : ""}`)
 
-                if (!confirmed) return { error: "The user did not confirm this connection" }
+                if (!confirmed) {
+
+                    log("info", "assistantConnectionRefused", `The user refused saving the ${kind} connection "${name}"`, { name, kind, endpoint })
+
+                    return { error: "The user did not confirm this connection" }
+                }
+
+                log("info", "assistantConnectionSaved", `Saved the ${kind} connection "${name}" pointing at ${endpoint}`, { name, kind, endpoint, hasKey: token !== null })
 
                 return { saved: store.save(name, kind, endpoint, token) }
             }
@@ -90,9 +104,18 @@ export default function connectionTools(application: Application, store: Connect
 
                 const confirmed = await application.authManager.assistantConfirmManager.request("connections_remove", `Remove the connection "${target}"`)
 
-                if (!confirmed) return { error: "The user did not confirm this removal" }
+                if (!confirmed) {
 
-                return { removed: store.remove(target) }
+                    log("info", "assistantConnectionRefused", `The user refused removing the connection "${target}"`, { name: target })
+
+                    return { error: "The user did not confirm this removal" }
+                }
+
+                const removed = store.remove(target)
+
+                log("info", "assistantConnectionRemoved", `Removed the connection "${target}"`, { name: target, removed })
+
+                return { removed }
             }
         },
 
@@ -120,22 +143,40 @@ export default function connectionTools(application: Application, store: Connect
 
                 const payload = verb === "GET" ? undefined : jsonBody(body)
 
-                const response = await fetch(target.toString(), {
+                log("info", "assistantApiCall", `Calling the "${connection}" API: ${verb} ${target.pathname}${target.search}`, { connection, method: verb, path: target.pathname, query: target.search || null })
 
-                    method: verb,
+                let response: Response
 
-                    headers: {
-                        "accept": "application/json, text/*;q=0.8",
-                        ...(record.token ? { authorization: `Bearer ${record.token}` } : {}),
-                        ...(payload !== undefined ? { "content-type": "application/json" } : {})
-                    },
+                try {
 
-                    body: payload,
+                    response = await fetch(target.toString(), {
 
-                    signal: AbortSignal.timeout(120_000)
-                })
+                        method: verb,
 
-                return await answerOf(response)
+                        headers: {
+                            "accept": "application/json, text/*;q=0.8",
+                            ...(record.token ? { authorization: `Bearer ${record.token}` } : {}),
+                            ...(payload !== undefined ? { "content-type": "application/json" } : {})
+                        },
+
+                        body: payload,
+
+                        signal: AbortSignal.timeout(120_000)
+                    })
+                }
+
+                catch (exception) {
+
+                    log("error", "assistantApiCallFailed", `The "${connection}" API call failed to connect`, { connection, reason: exception instanceof Error ? exception.message : String(exception) })
+
+                    throw exception
+                }
+
+                const answer = await answerOf(response) as { status: number, contentType: string, body: string | null, truncated: boolean, bytes: number }
+
+                log(answer.status < 400 ? "info" : "warning", "assistantApiCallAnswered", `The "${connection}" API answered ${answer.status}`, { connection, status: answer.status, bytes: answer.bytes, truncated: answer.truncated })
+
+                return answer
             }
         },
 
@@ -183,15 +224,34 @@ export default function connectionTools(application: Application, store: Connect
 
                 const confirmed = await application.authManager.assistantConfirmManager.request("mcp_call_tool", `Call MCP tool "${toolName}" on the connection "${target}" (${record.endpoint})`)
 
-                if (!confirmed) return { error: "The user did not confirm this MCP call" }
+                if (!confirmed) {
+
+                    log("info", "assistantMcpCallRefused", `The user refused calling the MCP tool "${toolName}" on "${target}"`, { connection: target, tool: toolName })
+
+                    return { error: "The user did not confirm this MCP call" }
+                }
+
+                log("info", "assistantMcpCall", `Calling the MCP tool "${toolName}" on "${target}"`, { connection: target, tool: toolName })
 
                 const client = mcpClient(target)
 
-                const answer = await client.callTool(toolName, (mcpArguments ?? {}) as Record<string, unknown>)
+                try {
 
-                return answer.isError
-                    ? { error: answer.text || `The MCP tool "${toolName}" reported an error` }
-                    : { result: answer.text }
+                    const answer = await client.callTool(toolName, (mcpArguments ?? {}) as Record<string, unknown>)
+
+                    log(answer.isError ? "warning" : "info", answer.isError ? "assistantMcpCallErrored" : "assistantMcpCallAnswered", `The MCP tool "${toolName}" on "${target}" ${answer.isError ? "reported an error" : "answered"}`, { connection: target, tool: toolName, textLength: answer.text.length })
+
+                    return answer.isError
+                        ? { error: answer.text || `The MCP tool "${toolName}" reported an error` }
+                        : { result: answer.text }
+                }
+
+                catch (exception) {
+
+                    log("error", "assistantMcpCallFailed", `The MCP call to "${target}" failed`, { connection: target, tool: toolName, reason: exception instanceof Error ? exception.message : String(exception) })
+
+                    throw exception
+                }
             }
         },
 

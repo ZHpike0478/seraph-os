@@ -154,6 +154,9 @@ export default class Gate extends TheLink {
 
         const account = await this.hub.bootstrap(username, password)
 
+        try { this.hub.logs.record("info", "gate", "administratorCreated", `The administrator "${account.username}" was created (bootstrap)`, { username: account.username }) }
+        catch { }
+
         await this.enter(account.username, true)
 
         return { signedUp: true }
@@ -167,9 +170,21 @@ export default class Gate extends TheLink {
 
         const found = await this.hub.verifySignIn(username, password)
 
-        if (!found) return false
+        if (!found) {
+
+            // Troubleshooting fact: a sign-in was REFUSED. Never the
+            // password, never a token - the attempted name and the origin
+            // only.
+            try { this.hub.logs.record("warning", "gate", "signInRefused", `A sign-in for "${String(username)}" was refused`, { username: String(username) }) }
+            catch { }
+
+            return false
+        }
 
         await this.enter(found.username, true)
+
+        try { this.hub.logs.record("info", "gate", "signInAccepted", `${found.username} signed in`, { username: found.username }) }
+        catch { }
 
         return true
     }
@@ -184,6 +199,9 @@ export default class Gate extends TheLink {
         if (!username) {
 
             if (typeof token === "string" && token) this.hub.forgetSession(token)
+
+            try { this.hub.logs.record("debug", "gate", "resumeRefused", `A returning session token resolved to no account (forgotten from the index)`, null) }
+            catch { }
 
             return false
         }

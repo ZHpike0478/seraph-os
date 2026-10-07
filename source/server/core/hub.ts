@@ -6,6 +6,7 @@ import Accounts, { type AccountSnapshot } from "./accounts"
 import Authentication from "./authentication/authentication"
 import openStore from "./open-store"
 import seedPrograms from "./hub-seed-programs"
+import SystemLogs from "./logs"
 
 /**
  * The multi-user registry above account-spaces.
@@ -29,6 +30,15 @@ export default class Hub {
 
     private readonly sessions: DatabaseSync
 
+    /**
+     * Hub-level facts (sign-ins, sign-outs, gateway binds and refusals) in
+     * one database at the home root: these events happen before any space
+     * exists or concern several spaces at once. The desktop's own
+     * /logs/query reaches its SPACE's logs; hub records are for the
+     * operator's troubleshooting (sqlite3 against hub-logs.sqlite).
+     */
+    public readonly logs: SystemLogs
+
     private constructor(home: string, icons: ApplicationIcons, accounts: Accounts, sessions: DatabaseSync) {
 
         this.home = home
@@ -38,6 +48,8 @@ export default class Hub {
         this.accounts = accounts
 
         this.sessions = sessions
+
+        this.logs = new SystemLogs(join(home, "hub-logs.sqlite"))
     }
 
     public static open(home: string, icons: ApplicationIcons): Hub {

@@ -45,6 +45,8 @@ export default async function (config: Config) {
 
     const hub = Hub.open(config.home, icons)
 
+    observeHubLifecycle(hub)
+
     // One server, five doors, each at its own name. The link door is the
     // multi-user gate; the other doors resolve the caller's token to its own
     // account-space before answering. Every door answers inside one wall.
@@ -82,6 +84,9 @@ export default async function (config: Config) {
 
     await writeFile(resolve(config.home, "desktop"), `${origin}\n`, { mode: 0o600 })
 
+    try { hub.logs.record("info", "system", "started", `The System listens on ${hostname}:${port}`, { hostname, port, mode: config.mode }) }
+    catch { /* Logging never obstructs boot. */ }
+
     const localGateway = await gateway(hub, gatewayAddress(config.home))
 
     if (config.assets) console.log(`  ➜  ${styleText("bold", "Desktop:")} ${origin}`)
@@ -89,6 +94,52 @@ export default async function (config: Config) {
     console.log(`  ➜  ${styleText("bold", "Gateway:")} ${localGateway.path}`)
 
     return { origin }
+}
+
+// Crashes and shutdowns survive their own process: these run BEFORE any
+// teardown a handler could skip, and the hub logger opens lazily on write.
+const exitLogs = new Map<Hub, () => void>()
+
+export function observeHubLifecycle(hub: Hub): void {
+
+    if (exitLogs.has(hub)) return
+
+    const write = (level: "info" | "error", kind: string, content: string) => {
+
+        try { hub.logs.record(level, "system", kind, content, null) }
+        catch { /* A dying process logs best-effort or not at all. */ }
+    }
+
+    const crash = (origin: string) => (error: unknown) => {
+
+        write("error", kind(origin), `${origin}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
+    }
+
+    const kind = (origin: string) => origin === "unhandledRejection" ? "unhandledRejection" : "uncaughtException"
+
+    const stop = (origin: string) => () => write("info", "shutdown", `The System is stopping (${origin})`)
+
+    const listeners = [
+        ["uncaughtException", crash("uncaughtException")] as const,
+        ["unhandledRejection", crash("unhandledRejection")] as const,
+        ["SIGINT", stop("SIGINT")] as const,
+        ["SIGTERM", stop("SIGTERM")] as const,
+        ["exit", stop("exit")] as const
+    ]
+
+    for (const [event, handler] of listeners) {
+
+        if (event === "uncaughtException") process.on("uncaughtException", handler as (error: unknown) => void)
+
+        else if (event === "unhandledRejection") process.on("unhandledRejection", handler as (reason: unknown) => void)
+
+        else process.once(event, handler as () => void)
+
+        // uncaughtException/unhandledRejection keep listening; a Map entry per
+        // hub stays for the process's life, so removal is only for signals.
+    }
+
+    exitLogs.set(hub, () => undefined)
 }
 
 export interface Config {

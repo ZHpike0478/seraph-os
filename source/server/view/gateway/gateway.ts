@@ -67,6 +67,9 @@ async function connect(hub: Hub, peer: GatewayPeer) {
 
         authenticated = true
 
+        try { hub.logs.record("info", "gateway", "peerBound", `A gateway peer bound to the "${space.authentication.username}" space`, { username: space.authentication.username }) }
+        catch { /* Logging never obstructs the door. */ }
+
         return []
     })
 
@@ -79,6 +82,9 @@ async function connect(hub: Hub, peer: GatewayPeer) {
     // door closes shortly after; the resolve of the refused call itself
     // always leaves first.
     async function refuse(reason: string) {
+
+        try { hub.logs.record("warning", "gateway", "peerRefused", reason, null) }
+        catch { /* Logging never obstructs the door. */ }
 
         setTimeout(() => peer.disconnect().catch(() => undefined), 1_000)
 

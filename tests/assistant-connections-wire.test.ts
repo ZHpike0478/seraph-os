@@ -596,3 +596,47 @@ test("with no model configured the space has no assistant and nothing connectivi
 
     space.close()
 })
+test("a full turn records turnCompleted in the space's logs with no user content", async () => {
+
+    const hub = open()
+
+    const admin = connect(hub)
+
+    const token = await bootstrapAdmin(admin)
+
+    const space = await spaceWithModel(hub, "root", await scriptModel([
+
+        { deltas: [{ text: "All done." }] }
+    ]))
+
+    const streamed: string[] = []
+
+    const stop = admin.client.$inbound.subscribe("/auth/assistant/chunk", value => {
+
+        if (typeof value === "string") streamed.push(value)
+    })
+
+    const replyArr = await admin.ask<string[]>("/auth/assistant/turn", token, "summarize the weather request")
+
+    stop()
+
+    assert.equal(replyArr[0], "All done.")
+
+    assert.deepEqual(streamed, ["All done.", ""])
+
+    // The space's own logs carry the turn fact.
+    const rows = space.logs.query("select level, source, kind, content, data from logs where kind = 'turnCompleted'") as Record<string, unknown>[]
+
+    assert.equal(rows.length, 1)
+
+    assert.equal(rows[0]!.source, "assistant")
+
+    assert.match(String(rows[0]!.content), /completed in/)
+
+    // The user's message text never lands in the record content or data.
+    const whole = JSON.stringify(rows)
+
+    assert.equal(whole.includes("summarize the weather request"), false)
+
+    assert.equal(whole.includes("All done."), false)
+})

@@ -98,12 +98,14 @@ public address; the System's own header wall (CSP, nosniff, frame-ancestors
 $SERAPHOS_HOME/
   accounts.sqlite          every account, scrypt-hashed, roles
   sessions-index.sqlite    token hash -> account-space (routing only)
+  hub-logs.sqlite          hub events: sign-ins, refusals, gateway binds, boot
   desktop                  the served address, for local tools
   users/<name>/
     storage/               Keyv state, uploads, appearance, logs
     assistant.sqlite       conversation history + long-term facts
     assistant-rag.sqlite   per-space retrieval index (chunks + vectors)
     assistant-connections.sqlite  saved MCP/API connections (secrets server-side)
+    space logs.sqlite       assistant turns, connectivity events, process errors
     system/                that user's System-storage root (file tools)
     programs/              that user's installed programs
 ```
@@ -152,3 +154,25 @@ bunx vite-node scripts/verify-release.ts seraphos@0.2.0.zip \
   SHA-256 hashes.
 - Known limits vs a full zero-trust spec: the LAN is still trusted for
   unauthenticated probing of program assets (per the upstream design).
+
+## Troubleshooting with the logs
+
+Everything the System wants an operator to know lands in two SQLite
+databases, both queryable with any sqlite3 client while the System runs
+(WAL mode; readers never block the writer):
+
+- `<home>/hub-logs.sqlite` — hub-level facts: administrator bootstraps,
+  sign-ins accepted and refused, returning sessions that resolved to
+  nothing, gateway peer binds and refusals, boot, shutdown, and crashes
+  (uncaughtException/unhandledRejection with stacks).
+- `<home>/users/<name>/logs.sqlite` — the account-space's own facts:
+  assistant turns (duration, reply length - never message content), the
+  assistant's connectivity events (connection saved/removed/refused, API
+  calls with status and byte counts, MCP calls, guard refusals), and
+  program-server crashes.
+
+Both keep 20,000 rows (oldest dropped on a periodic sweep), and both
+subscribe paths feed the desktop live: errors pop the system-errors dialog
+in the user's shell the moment they are durable. Records that cannot be
+written fall back to stderr as JSON lines, so a broken database never
+silences the System.
