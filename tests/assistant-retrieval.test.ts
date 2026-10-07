@@ -337,9 +337,242 @@ test("the binary and kind checks behave on names and text", () => {
 
     assert.equal(isIndexableName("data.csv"), true)
 
+    assert.equal(isIndexableName("report.pdf"), true, "PDFs index through the parser leg")
+
     assert.equal(isIndexableName("image.png"), false)
 
     assert.equal(isIndexableName("archive.gz"), false)
 
     assert.equal(isIndexableName("no_extension_here"), false)
+})
+
+// --- PDF ingestion -----------------------------------------------------------
+
+/** Builds a valid one-string-per-object PDF with real page objects (probe-proven shape). */
+function buildPdf(pages: { text: string | null }[]): Buffer {
+
+    // Object 1 catalog, 2 pages tree, 3..4 fonts; then per page: a page dict
+    // and its content stream, alternating (5,6,7,8,...). The page dict for
+    // page i sits at 5 + i*2 and names its stream at 6 + i*2.
+    const kids = pages.map((_, index) => `${5 + index * 2} 0 R`).join(" ")
+
+    const objects: string[] = [
+
+        "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+
+        `2 0 obj\n<< /Type /Pages /Kids [${kids}] /Count ${pages.length} >>\nendobj\n`,
+
+        "3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+
+        "4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>\nendobj\n"
+    ]
+
+    pages.forEach((page, index) => {
+
+        objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${6 + index * 2} 0 R >>`)
+
+        const content = page.text === null
+
+            ? "1 w 72 700 m 500 700 l S"
+            : `BT /F1 12 Tf 72 720 Td (${page.text.replace(/([\\()])/g, "\\$1")}) Tj ET`
+
+        const body = Buffer.byteLength(content, "latin1")
+
+        objects.push(`<< /Length ${body} >>\nstream\n${content}\nendstream`)
+    })
+
+    // Serialize with real offsets: every xref entry points at the byte where
+    // "N 0 obj" starts — the header prefix counts.
+    const headerLength = Buffer.byteLength("%PDF-1.4\n", "latin1")
+
+    let objectsText = ""
+
+    const offsets: number[] = []
+
+    let position = headerLength
+
+    for (const [index, object] of objects.entries()) {
+
+        const serialized = `${index + 1} 0 obj\n${object}\nendobj\n`
+
+        offsets.push(position)
+
+        objectsText += serialized
+
+        position += Buffer.byteLength(serialized, "latin1")
+    }
+
+    const startxref = position
+
+    let xref = `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+
+    for (const offset of offsets) xref += `${String(offset).padStart(10, "0")} 00000 n \n`
+
+    xref += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${startxref}\n%%EOF\n`
+
+    return Buffer.from("%PDF-1.4\n" + objectsText + xref, "latin1")
+}
+
+function fakeEmbeddingEndpoint(): { baseUrl: string, ready: Promise<unknown>, close: () => void } {
+
+    const endpoint = createServer((request, response) => {
+
+        let body = ""
+
+        request.on("data", chunk => { body += chunk })
+
+        request.on("end", () => {
+
+            const parsed = JSON.parse(body) as { input: string[] }
+
+            response.writeHead(200, { "content-type": "application/json" })
+
+            response.end(JSON.stringify({ data: parsed.input.map((text, index) => ({ index, embedding: bagEmbed(text) })) }))
+        })
+    })
+
+    const ready = new Promise(resolve => endpoint.listen(0, "127.0.0.1", resolve as () => void))
+
+    return {
+        get baseUrl() {
+
+            const address = endpoint.address()
+
+            return `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}/v1`
+        },
+        ready,
+        close: () => endpoint.close()
+    }
+}
+
+test("files_index parses PDFs into per-page chunks with page lineage", async () => {
+
+    const directory = mkdtempSync(join(tmpdir(), "seraph-rag-pdf-"))
+
+    homes.push(directory)
+
+    writeFileSync(join(directory, "handbook.pdf"), buildPdf([
+        { text: "The hub gate listens on port 6300 and refuses every unauthenticated socket." },
+        { text: "Chapter two covers the retrieval index and its reciprocal rank fusion." },
+        { text: null }
+    ]))
+
+    writeFileSync(join(directory, "notes.md"), "Plain markdown sits beside the PDF and indexes as before.")
+
+    const endpoint = fakeEmbeddingEndpoint()
+
+    const index = openIndex()
+
+    index.adoptModel("embed-eval")
+
+    try {
+
+        await endpoint.ready
+
+        const { default: Embedder } = await import("@server/core/assistant/embeddings")
+
+        const tools = ragTools({ home: new FileSystem(directory), ragIndex: index } as never, Embedder.open({ baseUrl: endpoint.baseUrl, apiKey: "", embedModel: "embed-eval", model: "m" })!)
+
+        const indexTool = tools.find(tool => tool.name === "files_index")!
+
+        const result = await indexTool.execute({ path: [] }) as { indexed: number, files: number, skipped: { path: string, reason: string }[] }
+
+        // Both files walked; the PDF contributes 2 page-chunks (its blank
+        // page takes none), the markdown 1; nothing skipped.
+        assert.equal(result.files, 2)
+
+        assert.equal(result.indexed, 3)
+
+        assert.equal(result.skipped.length, 0)
+
+        // Page lineage: search by an exact phrase from page one, expect
+        // page 1 back; same for page two.
+        const searchTool = tools.find(tool => tool.name === "files_search")!
+
+        const gateSearch = await searchTool.execute({ query: "gate listens on 6300" }) as { matches: { path: string, page: number, ord: number }[] }
+
+        assert.ok(gateSearch.matches.length > 0)
+
+        assert.equal(gateSearch.matches[0]!.path, "handbook.pdf")
+
+        assert.equal(gateSearch.matches[0]!.page, 1)
+
+        const fusionSearch = await searchTool.execute({ query: "reciprocal rank fusion" }) as { matches: { path: string, page: number }[] }
+
+        assert.ok(fusionSearch.matches.length > 0)
+
+        assert.equal(fusionSearch.matches[0]!.path, "handbook.pdf")
+
+        assert.equal(fusionSearch.matches[0]!.page, 2)
+
+        // Excerpts stay clean: the chunk text carries no page-title prefix.
+        const excerpt = gateSearch.matches[0] as unknown as { excerpt: string }
+
+        assert.ok(!excerpt.excerpt.startsWith("handbook.pdf"))
+    }
+
+    finally {
+
+        endpoint.close()
+
+        try { index?.close() } catch { }
+    }
+})
+
+test("broken PDFs skip with a reason and never abort the run", async () => {
+
+    const directory = mkdtempSync(join(tmpdir(), "seraph-rag-pdfjunk-"))
+
+    homes.push(directory)
+
+    writeFileSync(join(directory, "garbage.pdf"), Buffer.from("an innocent text file that lies about being a pdf"))
+    writeFileSync(join(directory, "truncated.pdf"), buildPdf([{ text: "only this page exists" }]).subarray(0, 90))
+    writeFileSync(join(directory, "empty.pdf"), buildPdf([{ text: null }, { text: null }]))
+    writeFileSync(join(directory, "real.md"), "markdown survives next to the wreckage")
+
+    const endpoint = fakeEmbeddingEndpoint()
+
+    const index = openIndex()
+
+    index.adoptModel("embed-eval")
+
+    try {
+
+        await endpoint.ready
+
+        const { default: Embedder } = await import("@server/core/assistant/embeddings")
+
+        const tools = ragTools({ home: new FileSystem(directory), ragIndex: index } as never, Embedder.open({ baseUrl: endpoint.baseUrl, apiKey: "", embedModel: "embed-eval", model: "m" })!)
+
+        const indexTool = tools.find(tool => tool.name === "files_index")!
+
+        const result = await indexTool.execute({ path: [] }) as { indexed: number, files: number, skipped: { path: string, reason: string }[] }
+
+        assert.equal(result.files, 4)
+
+        assert.equal(result.indexed, 1, "only the markdown indexes")
+
+        const reasons = Object.fromEntries(result.skipped.map(entry => [entry.path, entry.reason]))
+
+        assert.match(reasons["garbage.pdf"]!, /PDF/i)
+
+        assert.match(reasons["truncated.pdf"]!, /PDF/i)
+
+        assert.match(reasons["empty.pdf"]!, /no extractable text/)
+
+        // And the real file remains searchable: nothing about the junk
+        // poisoned the index.
+        const searchTool = tools.find(tool => tool.name === "files_search")!
+
+        const found = await searchTool.execute({ query: "markdown survives wreckage" }) as { matches: { path: string }[] }
+
+        assert.ok(found.matches.some(match => match.path === "real.md"))
+    }
+
+    finally {
+
+        endpoint.close()
+
+        try { index?.close() } catch { }
+    }
 })

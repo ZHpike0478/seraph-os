@@ -23,8 +23,8 @@ rename those; program SDKs speak that exact wire.
 
 ## Verified state (as handed off)
 
-- `npm run verify` green (`bun run verify` equivalent): type-check, build,
-  pack, **284/284 tests** across 82 files, including a distribution test
+- `bun run verify` green (`bun run verify` equivalent): type-check, build,
+  pack, **286/286 tests** across 82 files, including a distribution test
   that packs the release, installs it to a temp folder, and boots it
   (`tests/distribution.test.mjs`).
 - Twenty-one commits, clean tree, pushed to
@@ -125,14 +125,29 @@ The load-bearing decision: **isolation by construction, not by filtering.**
   from an older layout opens. v0 databases (no lineage columns) migrate in
   place via `pragma table_info`.
 - Ingestion (`rag-tools.ts`): extension **allowlist**
-  (`INDEXABLE_EXTENSIONS` — code, docs, configs, data), a
+  (`INDEXABLE_EXTENSIONS` — code, docs, configs, data, and `.pdf`), a
   replacement-character (**U+FFFD > 1%**) binary detector, per-file error
   isolation (a vanished or unreadable file is skipped and reported, never
-  aborts the run), a 512 KB per-file cap, and a
-  `skipped: [{path, reason}]` report in `files_index`'s result. Chunks are
-  ~800-char paragraphs with 100-char overlap, embedded **with their file
-  path prefixed** (`notes/todo.md\n...`) so paragraphs of different files
-  stop sounding identical; embedding requests ride in batches of 32.
+  aborts the run), a 512 KB per-file cap for text (16 MB for PDFs, which
+  parse wholly in memory), and a
+  `skipped: [{path, reason}]` report in `files_index`'s result. **PDF
+  ingestion (2026-10-06, `source/server/core/assistant/pdf.ts`)**: PDFs
+  are never read as text — bytes stream through a binary-safe reader into
+  `unpdf` (Mozilla PDF.js serverless build, lazy-loaded on first PDF so
+  the boot path never touches the ~1 MB parser bundle). The extractor
+  validates the `%PDF-` header (junk wearing the extension is a clean
+  skip, not a crash), then extracts per page (`mergePages: false`): each
+  page becomes ONE chunk titled `path (page N)` for the embedder while
+  stored text stays clean, text-free pages take no chunk, and a
+  `no extractable text (N pages)` skip covers image-only PDFs. Page
+  numbers ride the chunks table (`page` column, default 0 for text
+  chunks, migrated in place via `pragma table_info` like the lineage
+  columns) and come back on every hit as `RagHit.page` — a citation can
+  name file and page. Parser failures (truncated, password-locked,
+  structurally broken) skip the file with the parser's message. Chunks
+  are ~800-char paragraphs with 100-char overlap, embedded **with their
+  file path prefixed** (`notes/todo.md\n...`) so paragraphs of different
+  files stop sounding identical; embedding requests ride in batches of 32.
   Embeddings still come from the SAME OpenAI-compatible endpoint
   (`SERAPH_LLM_EMBED_MODEL`, default `nomic-embed-text`); the retrieval
   tools are absent when no endpoint is configured. KNOWN TRAP:
@@ -150,8 +165,11 @@ The load-bearing decision: **isolation by construction, not by filtering.**
 - Eval harness: `tests/assistant-retrieval.test.ts` — corpus recall with
   deterministic hash embeddings, keyword-leg-carries-identifier,
   floor semantics, model-reset, dimension-mismatch, ingestion skip
-  reporting, and a **verbatim-quote property** (any six consecutive words
-  of any chunk must return that chunk first, via the keyword leg). Extend
+  reporting, a **verbatim-quote property** (any six consecutive words
+  of any chunk must return that chunk first, via the keyword leg), and
+  **real-PDF ingestion coverage** (a hand-rolled valid-PDF builder with
+  true xref offsets — page lineage, blank-page omission, excerpt
+  cleanliness, junk/truncated/image-only skips with reasons). Extend
   this file, not ad-hoc tests, when touching retrieval.
 - `source/client/view/programs/seraph-chat.tsx` — the chat window; the
   Desktop renders it natively (no iframe) when a process's program name is
@@ -271,6 +289,18 @@ them.
    with a verbatim-quote property test. The retrieval layer now has the
    property test a future refactor must keep green — extend
    `tests/assistant-retrieval.test.ts` rather than bypassing it.
+
+9. DONE (2026-10-06) — PDF ingestion into the RAG index. A client can now
+   point `files_index` at a directory of mixed files and PDFs are parsed,
+   not skipped: new `source/server/core/assistant/pdf.ts` (unpdf/PDF.js,
+   lazy-loaded, header validation, per-page extraction, 500-page and 16 MB
+   caps), a `.pdf` allowlist entry, per-page chunks titled `path (page N)`
+   with a `page` lineage column on chunks (migrated in place) surfaced as
+   `RagHit.page`, and skip reasons for junk/truncated/image-only PDFs.
+   Tests 286/286. Dependency note: `pdf-parse` was rejected (unmaintained,
+   malicious-publish history); `unpdf@^1.8.1` is MIT, zero-dependency, and
+   its bundled PDF.js chunk ships inside the vite build with no external
+   wiring.
 
 ## Environment (all optional; System runs without any)
 

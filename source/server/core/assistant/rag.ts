@@ -7,8 +7,18 @@ export type RagHit = Readonly<{
 
     path: string
 
-    /** The chunk's position in its file, zero-based. */
+    /**
+     * The chunk's position in its file, zero-based. For a PDF this is the
+     * rank among that file's extracted pages (text-free pages take no
+     * chunk), not the raw PDF page number — use `page` for that.
+     */
     ord: number
+
+    /**
+     * For a PDF chunk, the PDF page number the text was extracted from
+     * (one-based); zero for every non-PDF chunk.
+     */
+    page: number
 
     /** Reciprocal-rank-fusion score over the cosine and keyword legs. */
     score: number
@@ -186,8 +196,10 @@ export default class RagIndex {
         return RagIndex.metaValue(this.database, "embedModel") ?? null
     }
 
-    /** Replaces every chunk of one path with fresh ones; returns the count indexed. */
-    public replacePath(path: string, chunks: { text: string, vector: Float32Array }[], source?: { size?: number, modifiedAt?: number }): number {
+    /** Replaces every chunk of one path with fresh ones; returns the count indexed.
+     * PDF chunks carry `page` (the one-based PDF page number); text chunks omit it.
+     */
+    public replacePath(path: string, chunks: { text: string, vector: Float32Array, page?: number }[], source?: { size?: number, modifiedAt?: number }): number {
 
         const at = Date.now()
 
@@ -202,11 +214,11 @@ export default class RagIndex {
             this.database.prepare("delete from chunks where path = ?").run(path)
 
             const insert = this.database.prepare(`
-                insert into chunks (path, ord, text, vector, size, modified_at, indexed_at)
-                values (?, ?, ?, ?, ?, ?, ?)
+                insert into chunks (path, ord, text, vector, page, size, modified_at, indexed_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?)
             `)
 
-            chunks.forEach((chunk, ord) => insert.run(path, ord, chunk.text, vectorToBlob(chunk.vector), size, modifiedAt, at))
+            chunks.forEach((chunk, ord) => insert.run(path, ord, chunk.text, vectorToBlob(chunk.vector), Math.max(0, Math.round(chunk.page ?? 0)), size, modifiedAt, at))
 
             this.database.exec("commit")
 
@@ -245,8 +257,8 @@ export default class RagIndex {
         const floor = options?.floor ?? 0
 
         const rows = this.database.prepare(`
-            select id, path, ord, text, vector, size, modified_at as modifiedAt, indexed_at as indexedAt from chunks
-        `).all() as unknown as { id: number, path: string, ord: number, text: string, vector: Uint8Array, size: number, modifiedAt: number, indexedAt: number }[]
+            select id, path, ord, text, vector, page, size, modified_at as modifiedAt, indexed_at as indexedAt from chunks
+        `).all() as unknown as { id: number, path: string, ord: number, text: string, vector: Uint8Array, page: number, size: number, modifiedAt: number, indexedAt: number }[]
 
         const query = Array.from(vector)
 
@@ -321,6 +333,8 @@ export default class RagIndex {
 
                 ord: entry.row.ord,
 
+                page: entry.row.page,
+
                 score: entry.score,
 
                 cosine: entry.cosine,
@@ -390,6 +404,8 @@ export default class RagIndex {
 
                 vector blob not null,
 
+                page integer not null default 0,
+
                 size integer not null default 0,
 
                 modified_at integer not null default 0,
@@ -401,7 +417,7 @@ export default class RagIndex {
         // A pre-staleness database: add the lineage columns in place.
         const columns = (database.prepare("pragma table_info(chunks)").all() as unknown as { name: string }[]).map(entry => entry.name)
 
-        for (const column of ["size", "modified_at", "indexed_at"]) {
+        for (const column of ["size", "modified_at", "indexed_at", "page"]) {
 
             if (!columns.includes(column)) database.exec(`alter table chunks add column ${column} integer not null default 0`)
         }
