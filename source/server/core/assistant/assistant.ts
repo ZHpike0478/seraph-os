@@ -27,9 +27,20 @@ const systemPrompt = [
 
     "When a user tells you something to remember for later, save it with memory_remember.",
 
+    "Remembered facts about the user appear under a Saved facts line; use them naturally and do not repeat them back unless they matter.",
+
+    "Search results from files may be stale: before quoting a searched excerpt, re-read the file with files_read.",
+
     "Keep answers short and plain."
 
 ].join(" ")
+
+/**
+ * The recalled facts shown to the model each turn. Recalling is the
+ * memory's job, not the model's: saved facts ride along even when the model
+ * never thought to ask.
+ */
+const RECALL_LIMIT = 6
 
 /** Configuration for one OpenAI-compatible endpoint. */
 export interface AssistantConfigurationValues {
@@ -140,9 +151,13 @@ export default class Assistant {
 
         this.memory.append("user", userContent)
 
+        // Facts the memory already holds about this message ride along as
+        // part of the system context; the model need not ask for them.
+        const remembered = this.memory.recall(userContent, RECALL_LIMIT)
+
         const messages: { role: string, content?: string, tool_calls?: unknown[], tool_call_id?: string }[] = [
 
-            { role: "system", content: systemPrompt },
+            { role: "system", content: remembered.length ? `${systemPrompt}\n\nSaved facts: ${remembered.map(fact => fact.text).join(" | ")}` : systemPrompt },
 
             ...history.map(historyMessage => ({ role: historyMessage.role, content: historyMessage.content })),
 

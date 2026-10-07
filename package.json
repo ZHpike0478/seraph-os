@@ -47,6 +47,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "sharp": "^0.35.4",
+    "unpdf": "^1.8.1",
     "uuid": "^14.0.2",
     "web-streams-polyfill": "^4.3.0",
     "ws": "^8.21.3"

@@ -14,6 +14,12 @@ export default class Embedder {
         this.configuration = configuration
     }
 
+    /** The embedding model on the wire, for the index's geometry stamp. */
+    public get embedModel(): string {
+
+        return this.configuration.embedModel
+    }
+
     public static open(configuration: AssistantConfigurationValues | null): Embedder | null {
 
         return configuration ? new Embedder(configuration) : null

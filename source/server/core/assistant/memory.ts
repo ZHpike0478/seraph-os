@@ -98,8 +98,38 @@ export default class AssistantMemory {
         }))
     }
 
-    /** Saves one long-term fact; returns its identity. */
+    /**
+     * Saves one long-term fact when it is not already there; returns the
+     * identity of the surviving row. Word-overlap near-duplicates replace
+     * the older row, so "the user's name is Steph" cannot accumulate fifty
+     * times as one conversation rephrases it.
+     */
     public remember(text: string): number {
+
+        const proposed = normalizeFact(text)
+
+        if (!proposed.words.length) throw new Error("A remembered fact needs some words")
+
+        const rows = this.database.prepare("select id, text from facts").all() as unknown as { id: number, text: string }[]
+
+        const overlap = rows
+
+            .map(row => ({ identity: row.id, text: row.text, score: overlapScore(proposed.words, normalizeFact(row.text).words) }))
+
+            .filter(entry => entry.score >= DUPLICATE_OVERLAP)
+
+            .sort((a, b) => b.score - a.score || b.identity - a.identity)
+
+        const [best] = overlap
+
+        if (best) {
+
+            // The newest phrasing wins the body; the original's age and
+            // identity survive so stability and provenance persist.
+            this.database.prepare("update facts set text = ? where id = ?").run(text, best.identity)
+
+            return best.identity
+        }
 
         const result = this.database.prepare("insert into facts (text, created_at) values (?, ?)").run(text, Date.now())
 
@@ -151,4 +181,32 @@ export default class AssistantMemory {
 
         this.database.close()
     }
+}
+
+/** Two facts sharing this fraction of significant words count as the same fact. */
+const DUPLICATE_OVERLAP = 0.6
+
+function normalizeFact(text: string): { words: string[] } {
+
+    const words = (text ?? "").toLowerCase().match(/[a-z0-9]+/g) ?? []
+
+    return { words: words.filter(word => word.length > 1) }
+}
+
+/** Jaccard overlap of two word sets, in [0, 1]. */
+function overlapScore(a: string[], b: string[]): number {
+
+    if (a.length === 0 || b.length === 0) return 0
+
+    const left = new Set(a)
+
+    const right = new Set(b)
+
+    let shared = 0
+
+    for (const word of left) if (right.has(word)) shared++
+
+    const union = new Set([...left, ...right]).size
+
+    return union === 0 ? 0 : shared / union
 }

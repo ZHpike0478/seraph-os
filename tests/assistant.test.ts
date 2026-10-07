@@ -234,3 +234,30 @@ test("a tool failure answers as text the model can correct", async () => {
 
     endpoint.stop()
 })
+
+test("saved facts ride into the turn without the model asking", async () => {
+
+    const endpoint = await scriptEndpoint([{ deltas: [{ text: "Noted." }] }])
+
+    const directory = mkdtempSync(join(tmpdir(), "seraph-assistant-"))
+
+    homes.push(directory)
+
+    const memory = AssistantMemory.open(join(directory, "assistant.sqlite"))
+
+    memory.remember("The user prefers dark theme")
+
+    const assistant = Assistant.open({ baseUrl: endpoint.url, apiKey: "", embedModel: "test-embed", model: "m" }, memory, [])
+
+    assert.ok(assistant)
+
+    for await (const _ of assistant.turn("what theme do I like?")) { void _ }
+
+    const body = JSON.parse(endpoint.bodies[0]!)
+
+    const system = body.messages.find((message: { role: string }) => message.role === "system")
+
+    assert.match(system.content, /Saved facts: The user prefers dark theme/)
+
+    endpoint.stop()
+})
