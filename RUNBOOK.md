@@ -13,17 +13,25 @@ bun run dev
 The Desktop serves on the first free port from **6300**; state lives in
 `storage/` inside the repository.
 
-## Run as a service (production layout)
+## Install from source (interactive)
 
 ```sh
-npm install --global @phreshos/cli   # the installer CLI is shared upstream for now
-phresh system install
+bun run setup
 ```
 
-An installed System keeps its state in `~/.seraphos` and serves on the first
-free port from **6400**. The service runs as your operating-system user:
-systemd (user unit) on Linux, launchd on macOS, a scheduled task on Windows.
-On a headless server, enable lingering so the service survives logout:
+The installer asks where to install (default `~/.seraphos/system`), what to
+bind, which ports to try, and - optionally - the assistant's model endpoint
+(key written only to `seraphos.env`, mode 0600, never printed). It packs and
+checksum-verifies the release archive, Ed25519-verifies it when a signature
+stands beside it, installs production dependencies, and writes a start
+wrapper (`start-seraphos.mjs`) that loads `seraphos.env` and runs the System.
+
+When it asks, it can also register the per-user service that starts at
+sign-in - systemd (user unit) on Linux, LaunchAgent on macOS, a logon
+scheduled task on Windows. Every step runs as your operating-system user;
+nothing asks for an administrator. On a headless Linux server, enable
+lingering so the service survives logout:
+
 
 ```sh
 sudo loginctl enable-linger $USER

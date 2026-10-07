@@ -25,7 +25,8 @@
     "start": "node --run build && NODE_ENV=development node dist/server/main.js",
     "pack": "node --run build && vite-node scripts/pack.ts",
     "verify": "node --run check && node --run build && node --run test",
-    "test": "vitest run --project default"
+    "test": "vitest run --project default",
+    "setup": "bunx vite-node scripts/install.ts"
   },
   "dependencies": {
     "@fontsource/roboto": "^5.3.0",
