@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react"
 import { AuthManagerContext } from "../contexts"
+import VoiceButton from "./voice-button"
 
 type StoredMessage = { role: string, content: string, at: number }
 
@@ -153,6 +154,8 @@ export default function SeraphChat() {
                     disabled={pending}
 
                 />
+
+                <VoiceButton setDraft={setDraft} />
 
                 <button type="button" className="rounded-lg bg-primary px-4 py-2" onClick={() => void send() } disabled={pending}>Send</button>
 
