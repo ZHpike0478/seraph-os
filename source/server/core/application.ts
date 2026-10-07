@@ -17,6 +17,8 @@ import Assistant, { assistantConfiguration, type AssistantConfigurationValues } 
 import assistantTools from "./assistant/tools"
 import ragTools from "./assistant/rag-tools"
 import Embedder from "./assistant/embeddings"
+import ConnectionsStore from "./assistant/connections"
+import connectionTools from "./assistant/connection-tools"
 
 export default class Application {
 
@@ -78,6 +80,9 @@ export default class Application {
     /** One space's retrieval index over its own files. */
     public readonly ragIndex: RagIndex
 
+    /** One space's saved outbound connections (mcp servers, HTTP APIs). */
+    public readonly connections: ConnectionsStore
+
     private assistantInstance: Assistant | null
 
     private constructor(payload: ApplicationPayload) {
@@ -100,6 +105,8 @@ export default class Application {
 
         this.ragIndex = payload.ragIndex
 
+        this.connections = payload.connections
+
         // A model endpoint configured at boot brings the assistant with it;
         // the tools see the finished application that carries them.
         this.assistantInstance = payload.assistantConfiguration
@@ -110,7 +117,11 @@ export default class Application {
 
                 // The retrieval tools ride the same endpoint: an embeddings
                 // model configured alongside the model unlocks them.
-                ...ragTools(this as unknown as Application, Embedder.open(payload.assistantConfiguration)!)
+                ...ragTools(this as unknown as Application, Embedder.open(payload.assistantConfiguration)!),
+
+                // The connectivity tools ride the same gate: an assistant
+                // configured at all means connections and web fetch exist.
+                ...connectionTools(this as unknown as Application, payload.connections)
 
             ])
 
@@ -129,6 +140,9 @@ export default class Application {
     public close() {
 
         try { this.ragIndex.close() }
+        catch { }
+
+        try { this.connections.close() }
         catch { }
 
         try { this.assistantMemory.close() }
@@ -156,7 +170,9 @@ export default class Application {
 
         const ragIndex = RagIndex.open(join(homePath, "assistant-rag.sqlite"))
 
-        const application = new Application({ icons, storage, home, store, authentication, appearanceManager, uploads, assistantMemory, ragIndex, assistantConfiguration: assistantConfiguration(process.env) })
+        const connections = ConnectionsStore.open(join(homePath, "assistant-connections.sqlite"))
+
+        const application = new Application({ icons, storage, home, store, authentication, appearanceManager, uploads, assistantMemory, ragIndex, connections, assistantConfiguration: assistantConfiguration(process.env) })
 
         await application.linkManager.authManager.programManager.initialize()
 
@@ -186,6 +202,8 @@ interface ApplicationPayload {
     assistantMemory: AssistantMemory
 
     ragIndex: RagIndex
+
+    connections: ConnectionsStore
 
     assistantConfiguration: AssistantConfigurationValues | null
 }

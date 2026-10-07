@@ -228,3 +228,163 @@ principal_stated_goal: 'it needs to have a built in RAG database'
 - C30 [x] isolation case via real Hub: two spaces, index written to one, the other sees zero chunks and zero hits.
 - C31 [x] catalog case: env-configured endpoint -> toolCatalog carries files_index/files_search (plus error-path text in the tool when index empty).
 - C32 [x] parent-run bun run verify: 81 files, 273/273, exit 0.
+
+# Run 8 - Connectivity: MCP servers, named APIs, web fetch (2026-10-07, in progress)
+
+principal_stated_goal: "the agent needs to be able to connect to MCPs, APIs, and web endpoints"
+
+## Ambiguity flags (stated to the principal, decided via questions)
+- Transports: Streamable-HTTP MCP only (per-space, isolation-clean; stdio is a
+  later run - spawning host processes breaks nothing today but is heavier).
+- API shape: named per-space connections whose secrets stay server-side (the
+  model asks for a connection by name), plus a plain SSRF-guarded web_fetch
+  for public GETs. No free-form authenticated http_request with model-chosen
+  credentials.
+- Management surface: wire routes only this run; Desktop connection-settings
+  dialog is a later run (matches HANDOFF's wire-first pattern).
+
+## Design (decided from reads)
+- ZERO new dependencies (like RAG). The MCP client speaks Streamable HTTP:
+  JSON-RPC 2.0 over fetch (initialize -> Mcp-Session-Id response header ->
+  notifications/initialized -> tools/list -> tools/call). Responses may be
+  application/json OR text/event-stream frames; both parsed. ~150 lines.
+- Storage: per-space SQLite assistant-connections.sqlite (same pattern as
+  assistant.sqlite / assistant-rag.sqlite): table connections(name, kind
+  mcp|api, endpoint, token nullable, created_at). Secrets never leave the
+  server: every view is {name, kind, endpoint, hasKey}.
+- Tools (7 new, joining the catalog when an assistant is configured):
+  connections_save / connections_list / connections_remove, api_call (method,
+  path, query, body; endpoint + Bearer merged SERVER-side; model-supplied
+  authorization ignored except content-type; param keys matching
+  authorization|token|secret|key refused), mcp_list_tools(connection),
+  mcp_call_tool(connection, tool, arguments) - confirm-gated,
+  web_fetch(url) - GET only, size-capped.
+- SSRF guard for web_fetch: http/https only, no userinfo in URL, literal IPs
+  checked directly (loopback/RFC1918/link-local incl 169.254.169.254/CGNAT/
+  multicast/0.0.0.0 and IPv6 equivalents refused), hostnames resolved via
+  node:dns with every address checked, hostnames resolved via node:dns with every address checked, redirects followed manually (<=4, every hop
+  re-validated), 512 KB cap, text/* and JSON-ish content served as body,
+  anything else metadata-only. Residual (honest): classic DNS-rebinding
+  TOCTOU window remains - the guard covers model-chosen-URL threats, not a
+  hostile authoritative DNS server.
+- Confirmations: connections_save/remove and mcp_call_tool pause through the
+  existing AssistantConfirmManager; the snapshot tool union widens
+  (files_write | desktop_set_theme | connections_save | connections_remove |
+  mcp_call_tool); the Desktop dialog renders summary generically, so NO
+  client change ships.
+- Routes on the space AuthManager for the later Desktop dialog:
+  /connections/* (list/save/remove/test). Session verification rides the
+  existing inbound intercept; a user reaches only their own space's store.
+
+## Claims (falsifiers pending build)
+- C33: A connection saved in one space is invisible to every other space.
+  FALSIFIER: two-space isolation test - other space's list lacks it, its
+  api_call/mcp_call_tool by that name refuse, in tool and route layers.
+- C34: MCP over Streamable HTTP works end-to-end against a scripted server:
+  initialize picks up Mcp-Session-Id, notifications/initialized sent,
+  tools/list returns tool names, tools/call returns the tool result, an
+  SSE-shaped response parses like JSON, JSON-RPC error surfaces as plain
+  text. FALSIFIER: scripted MCP endpoint test over real HTTP.
+- C35: Secrets never reach the model or the desktop: every saved view, route
+  response, and tool result carries hasKey, never the token substring.
+  FALSIFIER: no-secret-substring assertions across every return path.
+- C36: api_call merges server-side credentials: the endpoint receives the
+  Bearer token only when the connection record holds one, never an
+  authorization header from model-supplied parameters, and a param key
+  matching the secret regex is refused outright. FALSIFIER: scripted-endpoint
+  header assertions.
+- C37: web_fetch is guarded: literal loopback/RFC1918/link-local (metadata IP
+  included)/CGNAT/0.0.0.0/IPv6-local and non-http(s) schemes refuse with
+  plain errors, a hostname resolving into private space refuses, a public
+  URL fetches with body and content type. FALSIFIER: guard tests with a fake
+  resolver plus one real scripted fetch through the guard.
+- C38: Confirmations hold: connections_save/remove and mcp_call_tool write
+  or call nothing before Allow; Deny (or expiry/connection death) means the
+  plain refusal reaches the model; read-only tools never pause (zero-pending
+  regression). FALSIFIER: wire-level confirm-flow tests.
+- C39: Honest degradation: with no assistant configured, no connectivity
+  tools exist; routes refuse unauthorized callers; unknown names, wrong
+  kinds, and missing fields answer as plain errors the model can speak.
+  FALSIFIER: catalog test + refusal/error assertions.
+- C40: Nothing else changed: verify stays green, bounded diff. FALSIFIER:
+  git status bounded to the declared file list + full verify.
+
+## Anti-claims
+- No new npm dependency (no MCP SDK); stdio deliberately NOT built this run.
+- No free-form authenticated http_request; no model-chosen credentials.
+- No cross-space connection sharing; no hub-level connection store.
+- No Desktop dialog this run; confirmation lifecycle unchanged.
+- MCP sessions stay in memory, per space; sessions vanish on space close.
+
+# Run 8 evidence (collapsed at close, 2026-10-07)
+
+## Build notes
+- One transcription incident caught by review-then-tsc: the first mcp.ts
+  write landed with two transcription artifacts (a phantom bodyJson()
+  double-reading the response body; a stray LAST = line and missing decoder
+  in readEventStream). Both caught by reading the file before any test ran,
+  fixed, and covered by the suite that then passed. Lesson: generate-then-
+  replace writes need a read-back before check.
+- The C35 secret-echo assertion caught a REAL leak: /connections/test
+  answered store.find's full record (token included). Fixed to answer the
+  view only; the assertion now holds at every return path.
+- Test-suite fixups: unwrap() yields the route's returned value wrapped in
+  an array ([view]); the save route wraps as {saved: view}; tools/list
+  order is the server's wire order; trailing slash preserved by design in
+  connectionEndpoint (relative-path merging against base .../v1/ works).
+
+## Claims
+- C33 [x] tests/assistant-connections.test.ts (store level, two stores) +
+  tests/assistant-connections-wire.test.ts (two real Hub spaces): the other
+  space's list is empty, its api_call refuses /does not exist/, the admin's
+  route list carries only its own space's connections.
+- C34 [x] assistant-connections.test.ts MCP case: scripted Streamable-HTTP
+  server - initialize answered, Mcp-Session-Id header captured and re-sent
+  (asserted seen on later calls), notifications/initialized sent (202
+  accepted), tools/list names in wire order, tools/call text returned, an
+  SSE-framed reply parsed like JSON, JSON-RPC error surfaced as the
+  message text (assert.match /the tool exploded/), Bearer secret seen by
+  the server.
+- C35 [x] wire suite: route answers carry hasKey and never a token field or
+  secret substring (save/list/test/remove asserted; JSON.stringify scans
+  for sk-live-999); test-route leak found and fixed by this assertion.
+- C36 [x] wire suite api_call case: scripted endpoint received Bearer
+  sk-live-777 only when saved; connection without secret sent NO
+  authorization; query keys authorization/api_key refused with /not
+  allowed/; GET carries no body; path+query merged server-side
+  (/v1/contacts?limit=5).
+- C37 [x] module suite guard cases: 17 private literals refused (loopback,
+  RFC1918, metadata 169.254.169.254, CGNAT 100.64/10, multicast, 0.0.0.0,
+  IPv6 ::1/fe80/fc/fd/ff, ::ffff: mapped) and 4 public addresses allowed;
+  schemes (file) and credential URLs refused; guardUrl passed for
+  example.com and refused localhost + private literals; wire suite
+  web_fetch case: fetchTool refuses loopback with the guard's words and
+  fetches https://example.com/ 200 text/html with body (the one live
+  network call).
+- C38 [x] wire suite confirm cases: mcp_call_tool ask pending with tool
+  name, ZERO remote calls before Allow, exactly one after; Deny means zero
+  remote calls ever and the model's streamed reply reads the refusal (done
+  sentinel asserted); read tools (connections_list, mcp_list_tools,
+  api_call, web_fetch) never create pending confirms by construction (no
+  confirm call in their path - asserted via the read-tool tests completing
+  with zero pending).
+- C39 [x] wire suite: no-endpoint space has assistant null; routes still
+  answer with empty list; module suite validators refuse bad names/kinds/
+  endpoints/tokens with plain errors; wrong-kind lookup refuses (is an api
+  connection, not mcp).
+- C40 [x] parent-run bun run verify: 83 files, 287/287 (273 prior + 14
+  new), exit 0; bounded diff below.
+
+## Bounded diff (declared file list)
+- NEW source/server/core/assistant/connections.ts (store + validators)
+- NEW source/server/core/assistant/mcp.ts (Streamable-HTTP client)
+- NEW source/server/core/assistant/web-guard.ts (SSRF guard + guardedFetch)
+- NEW source/server/core/assistant/connection-tools.ts (7 tools)
+- MOD source/server/core/assistant-confirm.ts (tool union widened x3 spots)
+- MOD source/server/core/application.ts (store lifecycle + catalog merge)
+- MOD source/server/core/link-manager/auth-manager/auth-manager.ts (4 routes
+  + 4 validators)
+- MOD RUNBOOK.md (data layout two lines)
+- NEW tests/assistant-connections.test.ts (7 tests) +
+  tests/assistant-connections-wire.test.ts (7 tests)
+- ISA.md this run's section; rag.json stale debris deleted pre-run.

@@ -215,8 +215,24 @@ after any port-range rename (a bad rename once produced a "valid" range).
    green; a configured-but-missing signing PEM fails the pack instead of
    silently shipping an unsigned artifact.
 
+8. DONE (2026-10-07) - Connectivity: the assistant can reach MCP servers,
+   HTTP APIs, and the public web. Seven new tools (connections_save/list/
+   remove, api_call, mcp_list_tools, mcp_call_tool, web_fetch); connections
+   live per-space in `users/<name>/assistant-connections.sqlite` with secrets
+   held server-side (every view says hasKey, nothing ever echoes a token).
+   MCP speaks Streamable HTTP hand-rolled over fetch (initialize ->
+   Mcp-Session-Id -> tools/list -> tools/call; SSE-framed replies parse
+   like JSON; zero new dependencies). web_fetch runs through an SSRF guard
+   (private/loopback/link-local/metadata addresses refused, redirects
+   re-validated every hop, 512 KB cap; known residual: DNS-rebinding
+   TOCTOU). State-changing asks (save/remove connections, mcp_call_tool)
+   confirm in the Desktop like files_write; the confirm union widened, no
+   client change needed. Four /connections/* routes exist for a future
+   Desktop settings dialog. stdio MCP transports deliberately deferred.
+   287/287 verify (83 files; 14 new tests in two suites).
+
 ## Environment (all optional; System runs without any)
 
 `SERAPHOS_HOME` (state root), `SERAPHOS_PORT` (list/ranges), `SERAPHOS_HOST`
 (bind interface), `SERAPH_LLM_BASE_URL`, `SERAPH_LLM_API_KEY`,
-`SERAPH_LLM_MODEL`.
+`SERAPH_LLM_MODEL`, `SERAPH_LLM_EMBED_MODEL` (embeddings for RAG).

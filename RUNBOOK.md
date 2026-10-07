@@ -102,6 +102,8 @@ $SERAPHOS_HOME/
   users/<name>/
     storage/               Keyv state, uploads, appearance, logs
     assistant.sqlite       conversation history + long-term facts
+    assistant-rag.sqlite   per-space retrieval index (chunks + vectors)
+    assistant-connections.sqlite  saved MCP/API connections (secrets server-side)
     system/                that user's System-storage root (file tools)
     programs/              that user's installed programs
 ```

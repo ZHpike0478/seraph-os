@@ -15,7 +15,7 @@ export interface AssistantConfirmSnapshot {
 
     /** The writing tool that asked. */
 
-    readonly tool: "files_write" | "desktop_set_theme"
+    readonly tool: "files_write" | "desktop_set_theme" | "connections_save" | "connections_remove" | "mcp_call_tool"
 
     /** The change in one human-readable sentence. */
 
@@ -59,9 +59,9 @@ export default class AssistantConfirmManager extends TheLink {
      * or the connection's departure resolves false — never an error, so the
      * tool answers the model with a plain refusal.
      */
-    public async request(tool: "files_write" | "desktop_set_theme", summary: string, timeout: number = assistantConfirmTimeout): Promise<boolean> {
+    public async request(tool: "files_write" | "desktop_set_theme" | "connections_save" | "connections_remove" | "mcp_call_tool", summary: string, timeout: number = assistantConfirmTimeout): Promise<boolean> {
 
-        if (tool !== "files_write" && tool !== "desktop_set_theme") throw new Error("An assistant confirmation needs a writing tool")
+        if (tool !== "files_write" && tool !== "desktop_set_theme" && tool !== "connections_save" && tool !== "connections_remove" && tool !== "mcp_call_tool") throw new Error("An assistant confirmation needs a writing tool")
 
         if (typeof summary !== "string" || !summary.trim()) throw new Error("An assistant confirmation needs a summary")
 

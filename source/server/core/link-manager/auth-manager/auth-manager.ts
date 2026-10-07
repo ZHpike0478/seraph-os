@@ -556,6 +556,47 @@ export default class AuthManager extends TheLink {
         return store
     }
 
+    // The desktop's later connection-settings dialog consumes these; the
+    // assistant's own tools reach the same store directly. A user reaches
+    // only their own space's store; the session token was already verified
+    // by the inbound intercept.
+    @Subscribe("/connections/list")
+    protected async connectionsList() {
+
+        return this.linkManager.application.connections.list()
+    }
+
+    @Subscribe("/connections/save")
+    protected async connectionsSave(name: unknown, kind: unknown, endpoint: unknown, token: unknown) {
+
+        const store = this.linkManager.application.connections
+
+        return { saved: store.save(
+            connectionNameOf(name),
+            connectionKindOf(kind),
+            connectionEndpointOf(endpoint),
+            connectionTokenOf(token)
+        ) }
+    }
+
+    @Subscribe("/connections/remove")
+    protected async connectionsRemove(name: unknown) {
+
+        return { removed: this.linkManager.application.connections.remove(connectionNameOf(name)) }
+    }
+
+    @Subscribe("/connections/test")
+    protected async connectionsTest(name: unknown) {
+
+        const store = this.linkManager.application.connections
+
+        const record = store.find(connectionNameOf(name))
+
+        if (!record) throw new Error(`The connection "${String(name)}" does not exist`)
+
+        return { view: { name: record.name, kind: record.kind, endpoint: record.endpoint, hasKey: record.hasKey, createdAt: record.createdAt } }
+    }
+
     @Subscribe("/accounts/list")
     protected async accountsList() {
 
@@ -663,6 +704,49 @@ export type AccountView = Readonly<{ username: string, role: "admin" | "user", d
 function accountView(account: AccountSnapshot): AccountView {
 
     return { username: account.username, role: account.role, disabled: account.disabled, createdAt: account.createdAt.getTime() }
+}
+
+function connectionNameOf(value: unknown): string {
+
+    if (typeof value !== "string" || !value.trim()) throw new Error("A connection needs a name")
+
+    const name = value.trim()
+
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9 ._-]{0,63}$/.test(name)) throw new Error("A connection name is 1-64 characters starting with a letter or number")
+
+    return name
+}
+
+function connectionKindOf(value: unknown): "mcp" | "api" {
+
+    if (value !== "mcp" && value !== "api") throw new Error("A connection kind is mcp or api")
+
+    return value
+}
+
+function connectionEndpointOf(value: unknown): string {
+
+    if (typeof value !== "string" || !value.trim()) throw new Error("A connection needs an endpoint URL")
+
+    let parsed: URL
+
+    try { parsed = new URL(value.trim()) }
+    catch { throw new Error("The connection endpoint is not a valid URL") }
+
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("The connection endpoint is http or https")
+
+    if (parsed.username || parsed.password) throw new Error("The connection endpoint carries its credentials server-side, not in the URL")
+
+    return parsed.origin + (parsed.pathname === "/" ? "" : parsed.pathname) + parsed.search
+}
+
+function connectionTokenOf(value: unknown): string | null {
+
+    if (value === undefined || value === null || value === "") return null
+
+    if (typeof value !== "string") throw new Error("A connection secret is a string or nothing")
+
+    return value
 }
 
 function accountUsername(value: unknown): string {
