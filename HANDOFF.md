@@ -27,8 +27,9 @@ rename those; program SDKs speak that exact wire.
   pack, **286/286 tests** across 82 files, including a distribution test
   that packs the release, installs it to a temp folder, and boots it
   (`tests/distribution.test.mjs`).
-- Twenty-one commits, clean tree, pushed to
-  [ZHpike0478/seraph-os](https://github.com/ZHpike0478/seraph-os) `main`.
+- Twenty-two commits, clean tree; through `b88cbed` pushed to
+  [ZHpike0478/seraph-os](https://github.com/ZHpike0478/seraph-os) `main`
+  (PDF ingestion `4e00ce9` pending push).
   History starts at `991c231` (pre-rebrand snapshot) so the upstream diff is
   always reviewable. Latest commits: `219fc46` (assistant retrieval upgrade,
   item 8 below) on top of `2202e4d` (built-in RAG) and `ae0ac1e` (signed
