@@ -192,9 +192,23 @@ export default function connectionTools(application: Application, store: Connect
             },
             async execute({ connection }) {
 
-                const client = mcpClient(String(connection))
+                log("info", "assistantMcpList", `Listing the MCP tools of "${String(connection)}"`, { connection: String(connection) })
 
-                return { tools: await client.listTools() }
+                try {
+
+                    const tools = await mcpClient(String(connection)).listTools()
+
+                    log("info", "assistantMcpListAnswered", `The MCP server "${String(connection)}" exposes ${tools.length} tools`, { connection: String(connection), tools: tools.map(entry => entry.name) })
+
+                    return { tools }
+                }
+
+                catch (exception) {
+
+                    log("error", "assistantMcpListFailed", `The MCP handshake with "${String(connection)}" failed`, { connection: String(connection), reason: exception instanceof Error ? exception.message : String(exception) })
+
+                    throw exception
+                }
             }
         },
 
@@ -267,7 +281,26 @@ export default function connectionTools(application: Application, store: Connect
             },
             async execute({ url }) {
 
-                return await guardedFetch(url)
+                let host = ""
+
+                try { host = new URL(String(url)).host }
+                catch { host = "(unparsable)" }
+
+                try {
+
+                    const answer = await guardedFetch(url)
+
+                    log(answer.truncated ? "warning" : "info", "assistantWebFetchAnswered", `Fetched ${host}: ${answer.status}${answer.truncated ? " (truncated)" : ""}`, { host, status: answer.status, contentType: answer.contentType, bytes: answer.bytes, truncated: answer.truncated })
+
+                    return answer
+                }
+
+                catch (exception) {
+
+                    log("warning", "assistantWebFetchRefused", `The fetch of ${host} was refused: ${exception instanceof Error ? exception.message : String(exception)}`, { host, reason: exception instanceof Error ? exception.message : String(exception) })
+
+                    throw exception
+                }
             }
         }
     ]

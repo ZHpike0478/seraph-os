@@ -314,3 +314,22 @@ test("the MCP client speaks Streamable HTTP: handshake, session header, tools/li
 
     server.close()
 })
+
+import { safeData } from "@server/core/instrumentation"
+
+test("safeData strips circulars and Errors and fails closed", () => {
+
+    const circular: Record<string, unknown> = { name: "loop" }
+
+    circular.self = circular
+
+    const err = new Error("boom")
+
+    const out = safeData({ circular, err }) as { circular: { self: string }, err: { name: string, message: string } }
+
+    assert.equal(out.circular.self, "[circular]")
+
+    assert.deepEqual(out.err, { name: "Error", message: "boom" })
+
+    assert.deepEqual(safeData(BigInt(1) as never), { unserializable: true })
+})
