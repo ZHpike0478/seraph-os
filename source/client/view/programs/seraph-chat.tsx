@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import { AuthManagerContext } from "../contexts"
+import AssistantSettings from "./assistant-settings"
 import VoiceButton from "./voice-button"
 
 type StoredMessage = { role: string, content: string, at: number }
@@ -24,6 +25,10 @@ export default function SeraphChat() {
     const [streaming, setStreaming] = useState("")
 
     const bottom = useRef<HTMLDivElement>(null)
+
+    const [reloadState, setReloadState] = useState(0)
+
+    const refreshState = useCallback(function () { setReloadState(current => current + 1) }, [])
 
     useEffect(function () {
 
@@ -52,7 +57,7 @@ export default function SeraphChat() {
 
         return () => { stopChunks?.() }
 
-    }, [auth])
+    }, [auth, reloadState])
 
     useEffect(function () {
 
@@ -157,7 +162,9 @@ export default function SeraphChat() {
 
                 <VoiceButton setDraft={setDraft} />
 
-                <button type="button" className="rounded-lg bg-primary px-4 py-2" onClick={() => void send() } disabled={pending}>Send</button>
+                <AssistantSettings onChanged={() => void refreshState()} />
+
+                <button type="button" className="rounded-lg bg-primary px-4 py-2" onClick={() => void send() } disabled={pending}>{pending ? "…" : "Send"}</button>
 
             </div>
 

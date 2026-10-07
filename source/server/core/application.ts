@@ -14,6 +14,7 @@ import SystemLogs from "./logs"
 import AssistantMemory from "./assistant/memory"
 import RagIndex from "./assistant/rag"
 import Assistant, { assistantConfiguration, type AssistantConfigurationValues } from "./assistant/assistant"
+import { loadSpaceConfiguration } from "./assistant-config"
 import assistantTools from "./assistant/tools"
 import ragTools from "./assistant/rag-tools"
 import Embedder from "./assistant/embeddings"
@@ -74,6 +75,12 @@ export default class Application {
         return this.assistantInstance
     }
 
+    /** Swaps the live assistant (and its tool wiring) for one built on a new configuration. */
+    public replaceAssistant(next: Assistant | null): void {
+
+        this.assistantInstance = next
+    }
+
     /** One space's assistant memory, open even before a model is configured. */
     public readonly assistantMemory: AssistantMemory
 
@@ -84,6 +91,12 @@ export default class Application {
     public readonly connections: ConnectionsStore
 
     private assistantInstance: Assistant | null
+
+    /** The space's own directory - where its saved assistant configuration lives. */
+    public readonly homePath: string
+
+    /** The configuration the boot environment carried (the fallback when no space file stands). */
+    public readonly bootConfiguration: AssistantConfigurationValues | null
 
     private constructor(payload: ApplicationPayload) {
 
@@ -106,6 +119,10 @@ export default class Application {
         this.ragIndex = payload.ragIndex
 
         this.connections = payload.connections
+
+        this.homePath = payload.homePath
+
+        this.bootConfiguration = payload.assistantConfiguration
 
         // A model endpoint configured at boot brings the assistant with it;
         // the tools see the finished application that carries them.
@@ -172,7 +189,7 @@ export default class Application {
 
         const connections = ConnectionsStore.open(join(homePath, "assistant-connections.sqlite"))
 
-        const application = new Application({ icons, storage, home, store, authentication, appearanceManager, uploads, assistantMemory, ragIndex, connections, assistantConfiguration: assistantConfiguration(process.env) })
+        const application = new Application({ icons, storage, home, store, authentication, appearanceManager, uploads, assistantMemory, ragIndex, connections, homePath, assistantConfiguration: await loadSpaceConfiguration(homePath) ?? assistantConfiguration(process.env) })
 
         await application.linkManager.authManager.programManager.initialize()
 
@@ -206,4 +223,7 @@ interface ApplicationPayload {
     connections: ConnectionsStore
 
     assistantConfiguration: AssistantConfigurationValues | null
+
+    /** The space's own directory - where its saved assistant configuration lives. */
+    homePath: string
 }

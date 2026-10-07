@@ -130,6 +130,20 @@ export default class Assistant {
     }
 
     /** The tool catalog, for the desktop to show the user what Seraph may do. */
+    /**
+     * Runs one of this assistant's registered tools by name - the surface
+     * the model's rounds use, opened to the space's own management UI.
+     * Only registered tools run; the arguments carry the tool's own shape.
+     */
+    public async runTool(name: string, arguments_: Record<string, unknown>): Promise<unknown> {
+
+        const tool = this.tools.get(name)
+
+        if (!tool) throw new Error(`The tool "${name}" is not available`)
+
+        return tool.execute(arguments_)
+    }
+
     public toolCatalog() {
 
         return [...this.tools.values()].map(tool => ({

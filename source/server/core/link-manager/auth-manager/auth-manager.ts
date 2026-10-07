@@ -10,6 +10,12 @@ import PermissionManager from "../../permission-manager"
 import AssistantConfirmManager from "../../assistant-confirm"
 import OpeningManager from "../../opening-manager"
 import Accounts, { type AccountRole, type AccountSnapshot } from "../../accounts"
+import {
+    clearSpaceConfiguration,
+    configurationView,
+    ragStatus,
+    saveSpaceConfiguration
+} from "../../assistant-config"
 
 export default class AuthManager extends TheLink {
 
@@ -555,6 +561,100 @@ export default class AuthManager extends TheLink {
         this.linkManager.application.assistantMemory.clearConversation()
 
         return true
+    }
+
+    /** What the desktop may see of this space's assistant configuration. Never the key. */
+    @Subscribe("/assistant/config-view")
+    protected async assistantConfigView() {
+
+        return configurationView(this.linkManager.application)
+    }
+
+    /**
+     * Saves the space's configuration (key optional; a blank key keeps the
+     * stored one) and re-opens the assistant with it, live.
+     */
+    @Subscribe("/assistant/config-save")
+    protected async assistantConfigSave(baseUrl: unknown, model: unknown, embedModel: unknown, apiKey: unknown) {
+
+        const text = (value: unknown, name: string) => {
+
+            if (typeof value !== "string") throw new Error(`An assistant configuration needs a ${name}`)
+
+            return value
+        }
+
+        const configuration = await saveSpaceConfiguration(this.linkManager.application, {
+            baseUrl: text(baseUrl, "endpoint URL"),
+            model: text(model, "model"),
+            embedModel: text(embedModel, "embeddings model"),
+            apiKey: typeof apiKey === "string" ? apiKey : null,
+            keepKey: true
+        })
+
+        try { this.linkManager.application.logs.record("info", "assistant", "configurationSaved", `An assistant configuration was saved (live: ${configuration.live})`, { source: configuration.source, hasKey: configuration.hasKey, model: configuration.model, baseUrl: configuration.baseUrl }) }
+        catch { }
+
+        return configuration
+    }
+
+    /** Returns to the boot environment's configuration. */
+    @Subscribe("/assistant/config-clear")
+    protected async assistantConfigClear() {
+
+        await clearSpaceConfiguration(this.linkManager.application)
+
+        return configurationView(this.linkManager.application)
+    }
+
+    /** The space's retrieval index: what is in it, under which geometry. */
+    @Subscribe("/assistant/rag-status")
+    protected async assistantRagStatus() {
+
+        return ragStatus(this.linkManager.application)
+    }
+
+    /**
+     * Indexes one space path exactly as the model's files_index tool does:
+     * same allowlist, same skip reporting. The path reaches the space's own
+     * storage only.
+     */
+    @Subscribe("/assistant/rag-index")
+    protected async assistantRagIndex(path: unknown) {
+
+        return this.ragOperation("files_index", path)
+    }
+
+    /** One search against the space's index: the model's files_search, from the UI. */
+    @Subscribe("/assistant/rag-search")
+    protected async assistantRagSearch(query: unknown, k: unknown) {
+
+        if (typeof query !== "string" || !query.trim()) throw new Error("A search needs text")
+
+        return this.ragOperation("files_search", null, query, typeof k === "number" ? k : undefined)
+    }
+
+    /**
+     * Runs the RAG tools from the UI path: they are the space's own tools,
+     * executed with this space's application. A tool missing (no embeddings
+     * endpoint configured) is a plain refusal, not a crash.
+     */
+    private ragOperation(toolName: "files_index" | "files_search", path: unknown, query?: string, k?: number) {
+
+        const assistant = this.linkManager.application.assistant
+
+        if (assistant === null) throw new Error("No model endpoint is configured for the assistant (SERAPH_LLM_BASE_URL or the settings dialog)")
+
+        // The named tool is registered only when an embeddings endpoint
+        // stands, so a refusal here means exactly that.
+
+        const arguments_ = toolName === "files_index"
+
+            ? { path: Array.isArray(path) ? path : typeof path === "string" ? [path] : [] }
+
+            : { query: query ?? "", k }
+
+        return assistant.runTool(toolName, arguments_)
     }
 
     // Account administration resolves entirely inside the space: the shared
