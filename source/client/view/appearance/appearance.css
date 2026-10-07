@@ -1,4 +1,3 @@
-
 @import "tailwindcss";
 
 @import "@fontsource/roboto";
@@ -10,13 +9,46 @@
     user-select: none;
     -webkit-user-select: none;
 
+    /* Touch browsers treat every press as the start of a scroll, zoom,
+       or long-press context gesture unless this says otherwise. The
+       Desktop is overflow-hidden - there is nothing to scroll - and a
+       drag is a Window gesture. `manipulation` keeps touches as taps
+       (clicks) and pans while taking double-tap zoom away, so a rapid
+       second tap on a Taskbar control can never zoom the page and a
+       Window drag never fights the viewport. Pinch zoom stays allowed:
+       magnifying the screen is an accessibility act, not a gesture the
+       app may take. */
+    touch-action: manipulation;
+
 }
 
+/* Tapping the glass leaves a gray highlight that reads as broken paint.
+   None of that belongs on a desktop made of windows. */
+[data-desktop] *:not(input):not(textarea) {
+
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* What is written into stays selectable, as before. The same rule keeps a
+   focused field out of the browser's own small default type (13.33px,
+   non-inherited, since the cascade reaches inputs only through Tailwind's
+   preflight resetting their border) - that default makes iOS zoom the
+   whole screen to an input on focus. Inheriting the Desktop's face keeps
+   focus as focus instead of a zoom the person did not ask for. */
 [data-desktop] :is(input, textarea, [contenteditable="true"], [contenteditable=""]) {
 
     user-select: text;
     -webkit-user-select: text;
 
+    font: inherit;
+
+}
+
+/* The chat window's input is the one field typed into most; give it a
+   touch-legible face where it is too small. */
+[data-desktop] input[placeholder="Ask Seraph…"] {
+
+    font-size: 16px;
 }
 
 /* Pseudo-elements carry Surface paint, so they settle instantly too. */
@@ -27,7 +59,6 @@ html[data-phreshos-theme-capture] *::after {
     transition-delay: 0ms !important;
 
     transition-duration: 0ms !important;
-
 }
 
 /* A theme turns the whole screen at once, so it changes as a slow crossfade: the old view stays as
@@ -48,7 +79,6 @@ html[data-phreshos-theme-transition]::view-transition-old(root) {
 html[data-phreshos-theme-transition]::view-transition-new(root) {
 
     animation: phreshos-theme-enter var(--phreshos-theme-transition-duration) var(--phreshos-theme-transition-easing) both;
-
 }
 
 @keyframes phreshos-theme-enter {
@@ -62,9 +92,7 @@ html[data-phreshos-theme-transition]::view-transition-new(root) {
     to {
 
         opacity: 1;
-
     }
-
 }
 
 @theme {
