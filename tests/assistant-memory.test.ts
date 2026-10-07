@@ -89,3 +89,22 @@ test("memory persists across reopen", () => {
     assert.deepEqual(second.recent(10).map(message => message.content), ["persisted question"])
     assert.equal(second.recall("persisted").length, 1)
 })
+
+test("re-remembering a fact updates it instead of duplicating it", () => {
+
+    const memory = open()
+
+    const first = memory.remember("The user's name is Steph")
+
+    const again = memory.remember("The user's name is Steph, spelled s-t-e-p-h")
+
+    assert.equal(again, first, "the near-duplicate adopts the original identity")
+
+    assert.equal(memory.recall("name").length, 1, "no duplicate row accumulated")
+
+    const unrelated = memory.remember("The user builds rocket stoves")
+
+    assert.notEqual(unrelated, first, "a genuinely new fact keeps its own identity")
+
+    assert.equal(memory.recall("stove").length, 1)
+})

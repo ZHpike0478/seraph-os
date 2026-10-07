@@ -109,6 +109,13 @@ export default function assistantTools(application: Application): AssistantTool[
 
                 await storage.write(target, new Blob([content]).stream())
 
+                // A fresh write outruns its index: drop the stale chunks so
+                // a later search cannot serve the old text as fact. They
+                // return on the next files_index.
+                try { application.ragIndex.drop(joined) }
+
+                catch { }
+
                 return { written: joined, bytes }
             }
         },
