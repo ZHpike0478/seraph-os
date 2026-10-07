@@ -1,6 +1,6 @@
 # Seraph OS — Engineering Hand-off
 
-Date: 2026-10-05. Built by steph with Perplexity Computer (Hermes agent).
+Date: 2026-10-06. Built by steph with Perplexity Computer (Hermes agent).
 
 ## What this repository is
 
@@ -11,7 +11,7 @@ signs into individually. One repo contains the whole System:
 - `source/server` — the authoritative runtime ("the System")
 - `source/client` — the React Desktop the browser loads
 - `source/shared`, `source/libs` — cross-cutting contracts and utilities
-- `tests/` — 71 files, behavioral and boundary-focused
+- `tests/` — 82 files, behavioral and boundary-focused
 
 **Provenance.** Fork of [PhreshOS/system](https://github.com/PhreshOS/system)
 at release 0.1.117 (commit `b9c6185`, MIT, © 2026 Zohayr SLILEH). The fork
@@ -23,25 +23,23 @@ rename those; program SDKs speak that exact wire.
 
 ## Verified state (as handed off)
 
-- `bun run verify` green: type-check, build, **237/237 tests**, including a
-  distribution test that packs the release, installs it to a temp folder, and
-  boots it (`tests/distribution.test.mjs`).
-- Ten commits, clean tree. History starts at
-  `991c231` (pre-rebrand snapshot) so the upstream diff is always reviewable.
-  - 2026-10-06, commit `71634b7`: admin account management shipped (handoff
-  item 1). Five `/accounts/*` routes on the space AuthManager, gated against
-  the shared Accounts store the space's delegated Authentication already
-  holds (no hub reference enters a space); admin-only taskbar Accounts
-  button + shell dialog (create / role / disable-enable / password reset).
-  243/243 `bun run verify` green (6 new wire-level tests, including
-  non-admin refusal, bogus/anonymous refusal, last-admin protection). Still
-  no visual browser pass (wire/SSR tests only; open the Desktop by hand).
+- `npm run verify` green (`bun run verify` equivalent): type-check, build,
+  pack, **284/284 tests** across 82 files, including a distribution test
+  that packs the release, installs it to a temp folder, and boots it
+  (`tests/distribution.test.mjs`).
+- Twenty-one commits, clean tree, pushed to
+  [ZHpike0478/seraph-os](https://github.com/ZHpike0478/seraph-os) `main`.
+  History starts at `991c231` (pre-rebrand snapshot) so the upstream diff is
+  always reviewable. Latest commits: `219fc46` (assistant retrieval upgrade,
+  item 8 below) on top of `2202e4d` (built-in RAG) and `ae0ac1e` (signed
+  releases, item 7).
 - Live-wire verification: real messagepack WebSocket clients drove `/link`
   end-to-end (subscribe ack → anonymous owner state → bootstrap sign-up →
   session token push → second-connection sign-in → bound RPC) against the
-  built server on port 6499. Browser-console-level visual verification was
-  NOT done (browser tooling was unavailable); open the Desktop once by hand
-  before trusting pixels.
+  built server on port 6499. A headless-Chrome visual pass (item 5) covered
+  bootstrap, sign-in, Desktop, Accounts dialog, and the SeraphChat window;
+  full chat/dialog pixels with a configured model remain the one pixel-check
+  TODO.
 
 ## The architecture in one page
 
@@ -104,14 +102,57 @@ The load-bearing decision: **isolation by construction, not by filtering.**
   storage root, 256 KB read cap), `programs_list`, `desktop_set_theme`
   (appearance update), `memory_remember/memory_recall` (space memory).
 - `source/server/core/assistant/rag.ts` + `embeddings.ts` + `rag-tools.ts` —
-  **built-in RAG** (2026-10-06): each space keeps `assistant-rag.sqlite`
-  (chunks + Float32 vectors, cosine-scored). Embeddings come from the SAME
-  OpenAI-compatible endpoint (`SERAPH_LLM_EMBED_MODEL`, default
-  `nomic-embed-text`); the assistant's catalog gains `files_index` (a file or
-  a whole directory, paragraph ~800-char chunks with 100-char overlap,
-  re-index replaces stale chunks) and `files_search` (top-k excerpts with
-  paths), always as the signed-in user inside their own space. No new
-  dependency; tools absent when no endpoint is configured.
+  **built-in hybrid retrieval** (2026-10-06, commit `219fc46`). Each space
+  keeps `assistant-rag.sqlite`. Two coordinated stores: `chunks` (path, ord,
+  text, Float32 vector blob, plus lineage columns `size`, `modified_at`,
+  `indexed_at`) and `chunks_fts`, an **external-content FTS5 mirror** of
+  chunk text kept in sync by insert/delete/update triggers (the FTS5
+  `'delete'` command form is only legal against external-content tables —
+  do not revert to a plain fts5 table or deletes fail with "SQL logic
+  error"). Search is hybrid: cosine over vectors and BM25 over the mirror,
+  fused by reciprocal rank with the keyword leg weighted higher (0.6 vs
+  0.4) — an exact identifier (`6300`, `ragIndex`, an error code) outranks a
+  distant paraphrase. A noise `floor` (0.3, applied in `rag-tools.ts`)
+  drops cosine-only fuzz but **keyword matches always stand**. Hits carry
+  `ord`, raw `cosine`, `matched`, full chunk text, and the lineage triple,
+  so a caller can tell stale from fresh. `cosine()` returns 0 on
+  dimension mismatch instead of NaN.
+- Index lifecycle: `RagIndex.adoptModel()` stamps the embedding model in a
+  `meta` table; the FIRST call stamps it, a model CHANGE resets every chunk
+  in one transaction, and `files_search` then refuses until `files_index`
+  reindexes — vectors from one model carry no meaning in another's
+  geometry. A `ftsVersion` stamp rebuilds the mirror once when a database
+  from an older layout opens. v0 databases (no lineage columns) migrate in
+  place via `pragma table_info`.
+- Ingestion (`rag-tools.ts`): extension **allowlist**
+  (`INDEXABLE_EXTENSIONS` — code, docs, configs, data), a
+  replacement-character (**U+FFFD > 1%**) binary detector, per-file error
+  isolation (a vanished or unreadable file is skipped and reported, never
+  aborts the run), a 512 KB per-file cap, and a
+  `skipped: [{path, reason}]` report in `files_index`'s result. Chunks are
+  ~800-char paragraphs with 100-char overlap, embedded **with their file
+  path prefixed** (`notes/todo.md\n...`) so paragraphs of different files
+  stop sounding identical; embedding requests ride in batches of 32.
+  Embeddings still come from the SAME OpenAI-compatible endpoint
+  (`SERAPH_LLM_EMBED_MODEL`, default `nomic-embed-text`); the retrieval
+  tools are absent when no endpoint is configured. KNOWN TRAP:
+  `FileArea.list()` returns paths **relative to the listed directory** —
+  `collect()` must join them back onto the path it recursed from, or
+  nested files index under phantom names (this was a live bug).
+- Memory + auto-recall: `memory_remember` dedupes — a proposed fact
+  with ≥0.6 Jaccard word-overlap against an existing fact **replaces**
+  that fact's text and keeps its identity, so rephrasings cannot
+  accumulate. `Assistant.turn()` recalls memory itself: the top 6 fact
+  matches for the user's message ride into the system prompt as a
+  `Saved facts:` line — recall no longer depends on the model choosing to
+  call `memory_recall`. `files_write` drops the written path's stale
+  chunks so search cannot serve text the assistant just replaced.
+- Eval harness: `tests/assistant-retrieval.test.ts` — corpus recall with
+  deterministic hash embeddings, keyword-leg-carries-identifier,
+  floor semantics, model-reset, dimension-mismatch, ingestion skip
+  reporting, and a **verbatim-quote property** (any six consecutive words
+  of any chunk must return that chunk first, via the keyword leg). Extend
+  this file, not ad-hoc tests, when touching retrieval.
 - `source/client/view/programs/seraph-chat.tsx` — the chat window; the
   Desktop renders it natively (no iframe) when a process's program name is
   `seraph` (`process-window.tsx` seam). Streams via `/assistant/chunk`
@@ -153,10 +194,13 @@ TLS termination, and the data layout are in `RUNBOOK.md`.
 
 `bun run verify` before any push. Windows-specific notes baked into the
 suite: close every SQLite handle (`Accounts.close`, `Application.close`,
-`AssistantMemory.close`) before `rm`ing a home dir; temp-dir cleanup is
-best-effort (`maxRetries: 10, retryDelay: 100`, wrapped in try) because
-Windows holds fresh handles; `parsePorts` test-cases must be re-derived
-after any port-range rename (a bad rename once produced a "valid" range).
+`AssistantMemory.close`, `RagIndex.close`) before `rm`ing a home dir;
+temp-dir cleanup is best-effort (`maxRetries: 10, retryDelay: 100`, wrapped
+in try) because Windows holds fresh handles; `parsePorts` test-cases must
+be re-derived after any port-range rename (a bad rename once produced a
+"valid" range). Vitest's fork pool swallows test-process stdout: assert on
+results, don't log-and-look — write diagnostics to a file if you must see
+them.
 
 ## Known gaps / suggested order of work
 
@@ -215,8 +259,22 @@ after any port-range rename (a bad rename once produced a "valid" range).
    green; a configured-but-missing signing PEM fails the pack instead of
    silently shipping an unsigned artifact.
 
+8. DONE (2026-10-06, commit `219fc46`) — Assistant retrieval upgrade, the
+   full list is in the assistant section above. In one line each: hybrid
+   FTS5+cosine search with reciprocal-rank fusion; staleness lineage
+   (size/modified/indexed per chunk) with search results exposing it;
+   `adoptModel` geometry stamp that resets chunks on an embedding-model
+   change; ingestion allowlist + binary detector + skipped-file reporting +
+   batched embeddings; a fixed `collect()` bug that dropped nested files;
+   Jaccard-dedup on `memory_remember`; auto-recall of saved facts into
+   every turn; `files_write` dropping stale chunks; and an eval harness
+   with a verbatim-quote property test. The retrieval layer now has the
+   property test a future refactor must keep green — extend
+   `tests/assistant-retrieval.test.ts` rather than bypassing it.
+
 ## Environment (all optional; System runs without any)
 
 `SERAPHOS_HOME` (state root), `SERAPHOS_PORT` (list/ranges), `SERAPHOS_HOST`
 (bind interface), `SERAPH_LLM_BASE_URL`, `SERAPH_LLM_API_KEY`,
-`SERAPH_LLM_MODEL`.
+`SERAPH_LLM_MODEL`, `SERAPH_LLM_EMBED_MODEL` (the retrieval geometry its
+index stamps; changing it resets that space's chunks).
